@@ -38,7 +38,7 @@ def suggested_category(label):
         ('Здоровье', ['здоров', 'медицин', 'лекарств', 'аптек']),
         ('Транспорт', ['транспорт', 'автомоб', 'такси', 'бензин', 'парков']),
         ('Связь и подписки', ['связь', 'интернет', 'телефон', 'подписк']),
-        ('Дом и быт', ['коммун', 'жиль', 'квартир', 'ремонт', 'для дома', 'быт', 'домашнее хозяйство', 'животн', 'корм']),
+        ('Дом и быт', ['коммун', 'жиль', 'квартир', 'ремонт', 'для дома', 'быт', 'домашнее хозяйство', 'дом, уют', 'животн', 'корм']),
         ('Отдых', ['развлеч', 'отдых', 'путешеств', 'хобби', 'спорт']),
         ('Семья и подарки', ['подар', 'семь', 'дети', 'благотвор']),
         ('Покупки', ['одежд', 'обув', 'техник', 'космет', 'покупк', 'уход за собой']),
@@ -49,6 +49,12 @@ def available_category(db, suggested):
     if db.execute('SELECT 1 FROM categories WHERE name=?',(suggested,)).fetchone():
         return suggested
     return db.execute("SELECT name FROM categories ORDER BY (name='Прочее') DESC,rowid LIMIT 1").fetchone()[0]
+
+def zen_category_key(original, payee):
+    # Generic service labels cannot classify every merchant as a phone bill.
+    if original.casefold().strip() in ('', 'услуги', 'прочее') and payee.casefold().strip() in ('мтс', 'mts'):
+        return 'Дзен-мани: МТС (связь)'
+    return original
 
 class Ledger:
     def __init__(self, path):
@@ -76,6 +82,17 @@ class Ledger:
                 db.executemany('INSERT OR IGNORE INTO categories VALUES(?)', [(c,) for c in CATEGORIES])
                 db.execute("INSERT INTO settings VALUES('categories_initialized','1')")
             db.execute('INSERT OR IGNORE INTO settings VALUES(?,?)', ('cutover','2026-10-15'))
+            if not db.execute("SELECT 1 FROM settings WHERE key='zen_categories_v2'").fetchone():
+                for row in db.execute("SELECT * FROM records WHERE source='zenmoney'").fetchall():
+                    original = zen_category_key(row['original_category'], row['payee'])
+                    if original == row['original_category']:
+                        continue
+                    category = available_category(db, suggested_category(original))
+                    db.execute('INSERT OR IGNORE INTO mapping VALUES(?,?)', (original, category))
+                    category = db.execute('SELECT category FROM mapping WHERE original=?', (original,)).fetchone()[0]
+                    db.execute('UPDATE records SET original_category=?,category=? WHERE id=?',
+                               (original, category if row['category']=='Прочее' else row['category'], row['id']))
+                db.execute("INSERT INTO settings VALUES('zen_categories_v2','1')")
 
     @contextmanager
     def db(self):
@@ -222,6 +239,7 @@ class Ledger:
                 other = entities.get(('account',ia),{})
                 currency = entities.get(('instrument',str(item.get('outcomeInstrument',''))),{}).get('shortTitle','')
                 original = ' / '.join(entities.get(('tag',str(t)),{}).get('title','') for t in (item.get('tag') or []))
+                original = zen_category_key(original, item.get('payee') or '')
                 kind = 'income'
                 if out > 0:
                     kind = 'expense'
@@ -259,9 +277,16 @@ class Ledger:
             if len(month)!=7: raise ValueError('Неверный месяц')
         with self.db() as db:
             rows = [dict(r) for r in db.execute('SELECT * FROM records WHERE deleted=0 AND day LIKE ? ORDER BY day DESC,id',(month+'%',))]
+            instruments = {r['id']:json.loads(r['data']).get('shortTitle','?')
+                           for r in db.execute("SELECT id,data FROM entities WHERE kind='instrument'")}
         cutover = self.setting('cutover')
         for r in rows:
-            r.pop('raw')
+            raw = json.loads(r.pop('raw'))
+            # Keep the expense amount unchanged; display receipts separately, including old imports.
+            r['display_amount'] = cents(raw.get('income',0)) if r['source']=='zenmoney' and r['kind']=='income' else r['amount']
+            r['display_currency'] = 'RUB'
+            if r['source']=='zenmoney' and r['kind']=='income':
+                r['display_currency'] = instruments.get(str(raw.get('incomeInstrument','')), '?')
             r['status'] = r['decision'] or r['kind']
             r['category'] = r['custom_category'] or r['category']
             r['rubles'] = rubles(r['amount'])
@@ -276,6 +301,8 @@ class Ledger:
         for r in included: totals[r['category']] += r['rubles']
         with self.db() as db:
             mapping = [dict(r) for r in db.execute('SELECT * FROM mapping ORDER BY original')]
+            for entry in mapping:
+                entry['suggested'] = available_category(db, suggested_category(entry['original']))
             months = [r[0] for r in db.execute('SELECT DISTINCT substr(day,1,7) FROM records WHERE deleted=0 ORDER BY 1 DESC')]
         return {'rows':rows,'total':sum(r['rubles'] for r in included),'count':len(included),
                 'review':sum(r['primary'] and r['status']=='review' for r in rows),

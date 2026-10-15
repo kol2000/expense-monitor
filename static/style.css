@@ -20,3 +20,5 @@ html[data-theme="dark"] progress,html[data-theme="dark"] progress::-webkit-progr
 html[data-theme="dark"] progress::-webkit-progress-value{background:#8dbb90}
 html[data-theme="dark"] progress::-moz-progress-bar{background:#8dbb90}
 html[data-theme="dark"] #toast{background:#2b5740;color:#fff}
+
+.record-editor{grid-column:1/-1}.record-editor summary{cursor:pointer;color:#386c50;font-size:12px;width:fit-content}.record-editor[open] summary{margin-bottom:8px}.record-editor .record-actions{margin-top:8px}.transaction{gap:5px;padding:10px 0}.mapping-row button{grid-column:1/-1;justify-self:start;font-size:12px}html[data-theme="dark"] .record-editor summary{color:#a8d6b8}

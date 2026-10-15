@@ -46,6 +46,30 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(rubles(cents('0.01')),1)
         for value in ('NaN','Infinity','-1','1.001'):
             with self.assertRaises(ValueError): cents(value)
+    def test_receipt_display_does_not_change_expenses(self):
+        self.ledger.apply_diff(self.diff([self.tx('cashback',outcome=0,income='165.27',incomeInstrument=2),self.tx()]))
+        row=next(r for r in self.ledger.records() if r['source_id']=='cashback')
+        self.assertEqual(row['display_amount'],16527)
+        self.assertEqual(row['display_currency'],'RUB')
+        self.assertEqual(row['amount'],0)
+        self.assertFalse(row['included'])
+        self.assertEqual(self.ledger.dashboard('2026-10')['total'],1348)
+    def test_service_categories_and_existing_record_upgrade(self):
+        diff=self.diff([self.tx('mts',payee='МТС',tag=['services']),self.tx('other',payee='Мастер',tag=['services'])])
+        diff['tag']=[{'id':'services','title':'Услуги'}]
+        self.ledger.apply_diff(diff)
+        rows={r['source_id']:r for r in self.ledger.records()}
+        self.assertEqual(rows['mts']['category'],'Связь и подписки')
+        self.assertEqual(rows['other']['category'],'Прочее')
+        with self.ledger.db() as db:
+            db.execute("UPDATE records SET original_category='Услуги',category='Прочее',custom_category='Дом и быт' WHERE source_id='mts'")
+            db.execute("DELETE FROM settings WHERE key='zen_categories_v2'")
+        upgraded=Ledger(self.ledger.path)
+        self.assertEqual(next(r for r in upgraded.records() if r['source_id']=='mts')['category'],'Дом и быт')
+        upgraded.map_category('Дзен-мани: МТС (связь)','Покупки')
+        upgraded.apply_diff(diff)
+        with upgraded.db() as db:
+            self.assertEqual(db.execute("SELECT category FROM records WHERE source_id='mts'").fetchone()[0],'Покупки')
     def test_import_repeated_rows_preserved_reimport_idempotent(self):
         raw=export([('14-10-2026','1348,00','Продукты')]*2)
         self.assertEqual(self.ledger.import_csv(raw)['inserted'],2)
