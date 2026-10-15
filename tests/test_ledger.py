@@ -91,6 +91,8 @@ class LedgerTests(unittest.TestCase):
         restored=Ledger(target)
         self.assertNotIn('Продукты',restored.categories())
         self.assertEqual(restored.dashboard('2026-10')['totals'],{'Покупки':2})
+        restored.import_csv(export([('14-10-2026','25','Продуктовый магазин')]))
+        self.assertTrue(all(r['category'] in restored.categories() for r in restored.records()))
 
 class WebTests(unittest.TestCase):
     @classmethod

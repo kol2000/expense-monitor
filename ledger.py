@@ -45,6 +45,11 @@ def suggested_category(label):
     ]
     return next((cat for cat, keys in groups if any(k in text for k in keys)), 'Прочее')
 
+def available_category(db, suggested):
+    if db.execute('SELECT 1 FROM categories WHERE name=?',(suggested,)).fetchone():
+        return suggested
+    return db.execute("SELECT name FROM categories ORDER BY (name='Прочее') DESC,rowid LIMIT 1").fetchone()[0]
+
 class Ledger:
     def __init__(self, path):
         self.path = str(path)
@@ -126,7 +131,7 @@ class Ledger:
                 original = row['категория'].strip() or 'Без категории'
                 if original == 'Разное':
                     original += ' / ' + row.get('системная категория','Без группы')
-                category = suggested_category(original + ' ' + row.get('системная категория',''))
+                category = available_category(db,suggested_category(original + ' ' + row.get('системная категория','')))
                 db.execute('INSERT OR IGNORE INTO mapping VALUES(?,?)',(original,category))
                 category = db.execute('SELECT category FROM mapping WHERE original=?',(original,)).fetchone()[0]
                 cur = db.execute('''INSERT OR IGNORE INTO records
@@ -231,7 +236,7 @@ class Ledger:
                 if item['_blocked']:
                     db.execute("UPDATE records SET decision=NULL WHERE source='zenmoney' AND source_id=?",(sid,))
                 mapped = db.execute('SELECT category FROM mapping WHERE original=?',(original,)).fetchone()
-                category = mapped[0] if mapped else suggested_category(original)
+                category = mapped[0] if mapped else available_category(db,suggested_category(original))
                 db.execute('INSERT OR IGNORE INTO mapping VALUES(?,?)',(original,category))
                 db.execute('''INSERT INTO records(id,source,source_id,day,amount,category,original_category,account,payee,note,kind,deleted,raw)
                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source,source_id) DO UPDATE SET
