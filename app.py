@@ -97,7 +97,7 @@ def application(env,start):
                 sessions[session]=now+86400*7
             secure='; Secure' if os.environ.get('COOKIE_SECURE','1')=='1' else ''
             return reply(start,'200 OK',{'ok':True},extra=[('Set-Cookie',f'session={session}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800{secure}')])
-        if path in ('/','/app.js','/style.css','/manifest.webmanifest','/icon.svg') and method=='GET':
+        if path in ('/','/app.js','/theme.js','/style.css','/manifest.webmanifest','/icon.svg') and method=='GET':
             file=ROOT/'static'/('index.html' if path=='/' else path[1:])
             return reply(start,'200 OK',file.read_bytes(),mimetypes.guess_type(str(file))[0] or 'application/octet-stream')
         cookie=SimpleCookie()

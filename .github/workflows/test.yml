@@ -23,4 +23,3 @@ jobs:
           docker compose exec -T -e BACKGROUND_WORKER=0 app python -c "from app import ledger; assert ledger.dashboard('2026-10')['total']==11"
       - if: always()
         run: docker compose down
-
