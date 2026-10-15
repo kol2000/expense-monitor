@@ -11,5 +11,16 @@ jobs:
         with:
           python-version: '3.13'
       - run: python -m unittest discover -s tests -v
-      - run: docker compose --env-file .env.example config --quiet
-      - run: docker build -t expense-monitor:test .
+      - run: cp .env.example .env
+      - run: docker compose config --quiet
+      - run: docker compose build
+      - name: Start container and verify persistent database
+        run: |
+          printf '\nAPP_PASSWORD=ci-disposable-password\n' >> .env
+          docker compose up -d --wait
+          docker compose exec -T -e BACKGROUND_WORKER=0 app python -c "from app import ledger; ledger.manual({'day':'2026-10-15','amount':'10.01','category':'Продукты'}); assert ledger.dashboard('2026-10')['total']==11; ledger.backup('/data/smoke.sqlite3')"
+          docker compose restart
+          docker compose exec -T -e BACKGROUND_WORKER=0 app python -c "from app import ledger; assert ledger.dashboard('2026-10')['total']==11"
+      - if: always()
+        run: docker compose down
+
