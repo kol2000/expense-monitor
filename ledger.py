@@ -56,6 +56,21 @@ def zen_category_key(original, payee):
         return 'Дзен-мани: МТС (связь)'
     return original
 
+def zen_kind(item, entities, original):
+    """All imported amounts are RUB; only settlement and transfer evidence affect review."""
+    out, inc = cents(item.get('outcome', 0)), cents(item.get('income', 0))
+    if not out:
+        return 'income'
+    if item.get('hold'):
+        return 'review'
+    oa, ia = str(item.get('outcomeAccount', '')), str(item.get('incomeAccount', ''))
+    account, other = entities.get(('account', oa), {}), entities.get(('account', ia), {})
+    if inc > 0 and oa != ia:
+        return 'ignored' if account and other and account.get('type') != 'debt' and other.get('type') != 'debt' else 'review'
+    if any(word in (original+' '+str(item.get('payee', ''))).casefold() for word in ('перевод', 'сбп', 'transfer')):
+        return 'review'
+    return 'expense'
+
 class Ledger:
     def __init__(self, path):
         self.path = str(path)
@@ -93,6 +108,15 @@ class Ledger:
                     db.execute('UPDATE records SET original_category=?,category=? WHERE id=?',
                                (original, category if row['category']=='Прочее' else row['category'], row['id']))
                 db.execute("INSERT INTO settings VALUES('zen_categories_v2','1')")
+            if not db.execute("SELECT 1 FROM settings WHERE key='rub_only_v1'").fetchone():
+                entities = {(r['kind'],r['id']):json.loads(r['data']) for r in db.execute('SELECT * FROM entities')}
+                for row in db.execute("SELECT * FROM records WHERE source='zenmoney'").fetchall():
+                    raw = json.loads(row['raw'])
+                    raw['_blocked'] = bool(cents(raw.get('outcome',0)) and raw.get('hold'))
+                    db.execute('UPDATE records SET kind=?,raw=? WHERE id=?',
+                               (zen_kind(raw,entities,row['original_category']),json.dumps(raw,ensure_ascii=False),row['id']))
+                db.execute("INSERT INTO settings VALUES('rub_only_v1','1')")
+
 
     @contextmanager
     def db(self):
@@ -120,7 +144,7 @@ class Ledger:
         except UnicodeDecodeError:
             text = content.decode('cp1251')
         reader = csv.DictReader(io.StringIO(text), delimiter=';', strict=True)
-        required = {'дата','тип операции','сумма в валюте по умолчанию','валюта по умолчанию','категория'}
+        required = {'дата','тип операции','сумма в валюте по умолчанию','категория'}
         if not required.issubset(reader.fieldnames or []):
             raise ValueError('Ожидается CSV операций EasyFinance с разделителем ;')
         parsed, occurrences = [], Counter()
@@ -129,8 +153,6 @@ class Ledger:
                 raise ValueError(f'Строка {line}: неверное число столбцов')
             if row['тип операции'].strip().lower() != 'расход':
                 raise ValueError(f'Строка {line}: импорт поддерживает только расходы')
-            if row['валюта по умолчанию'].strip() not in ('Российский рубль','RUB','RUR'):
-                raise ValueError(f'Строка {line}: поддерживаются только рубли')
             try:
                 day = datetime.strptime(row['дата'], '%d-%m-%Y').date().isoformat()
                 amount = cents(row['сумма в валюте по умолчанию'])
@@ -185,7 +207,7 @@ class Ledger:
             if decision not in (None,'expense','ignored','review'):
                 raise ValueError('Неизвестное решение')
             if decision == 'expense' and json.loads(record['raw']).get('_blocked'):
-                raise ValueError('Операция ожидает проведения или указана не в рублях. Дождитесь обновления или внесите рублёвый расход вручную.')
+                raise ValueError('Операция ожидает окончательного списания банком. Дождитесь обновления из Дзен-мани; повторно вручную расход добавлять не нужно.')
             category = values.get('category') or None
             if category and not db.execute('SELECT 1 FROM categories WHERE name=?',(category,)).fetchone():
                 raise ValueError('Неизвестная категория')
@@ -236,21 +258,11 @@ class Ledger:
                 out, inc = cents(item.get('outcome',0)), cents(item.get('income',0))
                 oa, ia = str(item.get('outcomeAccount','')), str(item.get('incomeAccount',''))
                 account = entities.get(('account',oa),{})
-                other = entities.get(('account',ia),{})
-                currency = entities.get(('instrument',str(item.get('outcomeInstrument',''))),{}).get('shortTitle','')
                 original = ' / '.join(entities.get(('tag',str(t)),{}).get('title','') for t in (item.get('tag') or []))
                 original = zen_category_key(original, item.get('payee') or '')
-                kind = 'income'
-                if out > 0:
-                    kind = 'expense'
-                    if inc > 0 and oa != ia:
-                        # Debt or unknown accounts are not evidence of a transfer between owned accounts.
-                        kind = 'ignored' if account and other and account.get('type') != 'debt' and other.get('type') != 'debt' else 'review'
-                    if any(word in (original+' '+str(item.get('payee',''))).casefold() for word in ('перевод','сбп','transfer')) and kind == 'expense':
-                        kind = 'review'
-                    if item.get('hold') or currency not in ('RUB','RUR'): kind = 'review'
+                kind = zen_kind(item, entities, original)
                 item = dict(item)
-                item['_blocked'] = bool(out and (item.get('hold') or currency not in ('RUB','RUR')))
+                item['_blocked'] = bool(out and item.get('hold'))
                 if item['_blocked']:
                     db.execute("UPDATE records SET decision=NULL WHERE source='zenmoney' AND source_id=?",(sid,))
                 mapped = db.execute('SELECT category FROM mapping WHERE original=?',(original,)).fetchone()
@@ -277,17 +289,17 @@ class Ledger:
             if len(month)!=7: raise ValueError('Неверный месяц')
         with self.db() as db:
             rows = [dict(r) for r in db.execute('SELECT * FROM records WHERE deleted=0 AND day LIKE ? ORDER BY day DESC,id',(month+'%',))]
-            instruments = {r['id']:json.loads(r['data']).get('shortTitle','?')
-                           for r in db.execute("SELECT id,data FROM entities WHERE kind='instrument'")}
         cutover = self.setting('cutover')
         for r in rows:
             raw = json.loads(r.pop('raw'))
             # Keep the expense amount unchanged; display receipts separately, including old imports.
             r['display_amount'] = cents(raw.get('income',0)) if r['source']=='zenmoney' and r['kind']=='income' else r['amount']
             r['display_currency'] = 'RUB'
-            if r['source']=='zenmoney' and r['kind']=='income':
-                r['display_currency'] = instruments.get(str(raw.get('incomeInstrument','')), '?')
             r['status'] = r['decision'] or r['kind']
+            r['review_reason'] = ''
+            if r['status']=='review':
+                r['review_reason'] = ('Ожидает окончательного списания банком. Обновится из Дзен-мани.'
+                                      if raw.get('hold') else 'Проверьте, является ли операция расходом или переводом.')
             r['category'] = r['custom_category'] or r['category']
             r['rubles'] = rubles(r['amount'])
             r['primary'] = (r['source']=='easyfinance' and r['day']<cutover) or (r['source']!='easyfinance' and r['day']>=cutover)

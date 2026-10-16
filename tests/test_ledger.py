@@ -102,11 +102,40 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(self.ledger.dashboard('2026-10')['total'],1348)
         result=self.ledger.reconcile('2026-10')
         self.assertEqual(result['matched'],1);self.assertEqual(len(result['easyfinance_only']),1)
-    def test_hold_and_foreign_cannot_be_counted(self):
-        for extra in ({'hold':True},{'outcomeInstrument':9}):
-            self.ledger.apply_diff(self.diff([self.tx(**extra)]))
-            with self.assertRaises(ValueError):self.ledger.edit({'id':'zm:one','decision':'expense'})
-            self.assertEqual(self.ledger.dashboard('2026-10')['total'],0)
+    def test_hold_waits_then_becomes_expense(self):
+        self.ledger.apply_diff(self.diff([self.tx(hold=True,outcomeInstrument=9)]))
+        with self.assertRaisesRegex(ValueError, 'окончательного списания'):
+            self.ledger.edit({'id':'zm:one','decision':'expense'})
+        self.assertIn('Ожидает', self.ledger.records()[0]['review_reason'])
+        self.assertEqual(self.ledger.dashboard('2026-10')['total'],0)
+        self.ledger.apply_diff(self.diff([self.tx(hold=False,outcomeInstrument=9)],2))
+        self.assertEqual(self.ledger.dashboard('2026-10')['total'],1348)
+    def test_currency_metadata_is_ignored(self):
+        diff=self.diff([self.tx(outcomeInstrument=9),self.tx('receipt',outcome=0,income=50,incomeInstrument=9)])
+        diff['instrument']=[{'id':9,'shortTitle':'USD'}]
+        self.ledger.apply_diff(diff)
+        self.assertEqual(self.ledger.dashboard('2026-10')['total'],1348)
+        self.assertTrue(all(r['display_currency']=='RUB' for r in self.ledger.records()))
+        self.ledger.apply_diff({'serverTimestamp':2,'transaction':[self.tx('missing',outcomeInstrument=None)]})
+        self.assertEqual(self.ledger.dashboard('2026-10')['total'],2696)
+    def test_rub_migration_repairs_old_blocks_and_preserves_overrides(self):
+        self.ledger.apply_diff(self.diff([self.tx('buy'),self.tx('held',hold=True),self.tx('own',income=1347.27,incomeAccount='b'),self.tx('custom')]))
+        self.ledger.edit({'id':'zm:custom','decision':'ignored','category':'Здоровье'})
+        with self.ledger.db() as db:
+            for row in db.execute("SELECT id,raw FROM records").fetchall():
+                raw=json.loads(row['raw']);raw['_blocked']=True
+                db.execute("UPDATE records SET kind='review',raw=? WHERE id=?",(json.dumps(raw),row['id']))
+            db.execute("DELETE FROM settings WHERE key='rub_only_v1'")
+        upgraded=Ledger(self.ledger.path)
+        rows={r['source_id']:r for r in upgraded.records()}
+        self.assertEqual(rows['buy']['status'],'expense')
+        self.assertEqual(rows['held']['status'],'review')
+        self.assertEqual(rows['own']['status'],'ignored')
+        self.assertEqual(rows['custom']['status'],'ignored')
+        self.assertEqual(rows['custom']['category'],'Здоровье')
+        self.assertEqual(upgraded.setting('zen_cursor'),'1')
+        self.assertEqual(upgraded.dashboard('2026-10')['total'],1348)
+        self.assertEqual(Ledger(self.ledger.path).dashboard('2026-10')['total'],1348)
     def test_category_merge_and_backup(self):
         self.ledger.manual({'day':'2026-10-15','amount':'1.01','category':'Продукты'})
         self.ledger.rename_category('Продукты','Покупки')
