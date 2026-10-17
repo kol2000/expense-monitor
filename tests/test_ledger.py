@@ -44,6 +44,74 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(rubles(cents('248.80')),249)
         self.assertEqual(rubles(cents('100')),100)
 
+    def test_rules_priority_override_and_sync(self):
+        l=self.ledger
+        l.subcategory({'category':'Покупки','name':'Техника'})
+        l.rule({'pattern':'shop','mode':'contains','category':'Покупки','subcategory':'Техника'})
+        l.rule({'pattern':'shop','mode':'exact','category':'Продукты'})
+        l.apply_diff(self.diff([self.tx(payee='SHOP')]))
+        row=l.records()[0]
+        self.assertEqual((row['category'],row['subcategory']),('Покупки','Техника'))
+        self.assertEqual(l.dashboard('2026-10')['totals'],{'Покупки':1348})
+        l.edit({'id':row['id'],'category':'Продукты','decision':None,'subcategory':''})
+        l.apply_diff(self.diff([self.tx(payee='SHOP',outcome='2')],2))
+        self.assertEqual(l.records()[0]['category'],'Продукты')
+        l.edit({'id':row['id'],'decision':None,'reset_category':True})
+        self.assertEqual(l.records()[0]['category'],'Покупки')
+        with self.assertRaises(ValueError):l.rule({'pattern':'x','category':'Продукты','subcategory':'Техника'})
+        l.rename_category('Покупки','Новая')
+        self.assertEqual(l.feature_settings()['rules'][0]['category'],'Новая')
+        self.assertEqual(l.feature_settings()['subcategories'][0]['category'],'Новая')
+
+    def test_manual_edit_trash_restore_and_subcategory_merge(self):
+        l=self.ledger
+        l.subcategory({'category':'Покупки','name':'Техника'})
+        sid=l.manual({'day':'2026-10-16','amount':'100','category':'Покупки','subcategory':'Техника'})['id']
+        l.manual_update({'id':sid,'day':'2026-11-01','amount':'200.01','category':'Покупки','subcategory':'Техника','payee':'Новый','note':'Комментарий'})
+        self.assertEqual(l.dashboard('2026-10')['total'],0)
+        self.assertEqual(l.dashboard('2026-11')['total'],201)
+        l.subcategory({'category':'Покупки','old':'Техника','name':'Компьютер'})
+        self.assertEqual(l.records()[0]['subcategory'],'Компьютер')
+        l.manual_update({'id':sid,'action':'delete'})
+        self.assertEqual(l.records(),[])
+        self.assertEqual(len(l.feature_settings()['trash']),1)
+        l.manual_update({'id':sid,'action':'restore'})
+        self.assertEqual(l.records()[0]['payee'],'Новый')
+        l.apply_diff(self.diff([self.tx()]))
+        with self.assertRaises(ValueError):l.manual_update({'id':'zm:one','action':'delete'})
+
+    def test_duplicate_review_and_reconcile_fingerprints(self):
+        l=self.ledger
+        sid=l.manual({'day':'2026-10-16','amount':'1347.27','category':'Покупки'})['id']
+        l.apply_diff(self.diff([self.tx()]))
+        self.assertEqual(len(l.attention('2026-10')['duplicates']),1)
+        l.review({'kind':'duplicate','ids':[sid,'zm:one']})
+        self.assertEqual(l.attention('2026-10')['duplicates'],[])
+        l.manual_update({'id':sid,'day':'2026-10-17','amount':'1347.27','category':'Покупки'})
+        self.assertEqual(len(l.attention('2026-10')['duplicates']),1)
+        l.import_csv(export([('15-10-2026','1349','Покупки')]))
+        pairs=l.reconcile('2026-10')['pairs']
+        self.assertEqual(len(pairs),1)
+        self.assertFalse(pairs[0]['exact'])
+        ids=[pairs[0]['easyfinance']['id'],pairs[0]['app']['id']]
+        l.review({'kind':'reconcile','ids':ids})
+        self.assertTrue(l.reconcile('2026-10')['pairs'][0]['checked'])
+        l.review({'kind':'reconcile','ids':ids,'undo':True})
+        self.assertFalse(l.reconcile('2026-10')['pairs'][0]['checked'])
+        l.manual_update({'id':sid,'day':'2026-10-17','amount':'1348','category':'Покупки'})
+        self.assertEqual(len(l.attention('2026-10')['duplicates']),1)
+
+    def test_range_quarter_comparison(self):
+        l=self.ledger;l.set_setting('cutover','2020-01-01')
+        for day,amount in [('2025-01-01','10'),('2026-01-01','20'),('2026-03-31','30'),('2026-04-01','40')]:
+            l.manual({'day':day,'amount':amount,'category':'Покупки'})
+        self.assertEqual(l.reports('2026-02','quarter')['total'],50)
+        r=l.reports('2026-01','range','2026-01-01','2026-04-01','2025-01-01','2025-12-31')
+        self.assertEqual((r['total'],len(r['buckets'])),(90,4))
+        self.assertEqual(sum(x['rubles'] for x in r['comparison']),10)
+        self.assertEqual(l.reports('2026-01','range','2025-01-01','2026-04-01')['total'],100)
+        with self.assertRaises(ValueError):l.reports('2026-01','range','2026-02-01','2026-01-01')
+
     def test_reports_cutover_rounding_and_exclusions(self):
         self.ledger.import_csv(export([('14-10-2026','10.01','Топливо'),('15-10-2026','99','Топливо')]))
         self.ledger.apply_diff(self.diff([
@@ -218,6 +286,8 @@ class WebTests(unittest.TestCase):
         return result
     def test_auth_and_csrf(self):
         self.assertTrue(self.request('/api/dashboard')['status'].startswith('401'))
+        for path in ('/api/features','/api/attention','/api/reports'):
+            self.assertTrue(self.request(path)['status'].startswith('401'))
         self.assertTrue(self.request('/api/login',{'password':'test-password-only'},csrf=False)['status'].startswith('403'))
         result=self.request('/api/login',{'password':'test-password-only'})
         cookie=result['headers']['Set-Cookie'].split(';')[0]

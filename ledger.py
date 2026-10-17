@@ -8,7 +8,8 @@ import sqlite3
 import uuid
 from collections import Counter
 from contextlib import contextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
+from features import Features
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -81,7 +82,7 @@ def zen_kind(item, entities, original):
         return 'review'
     return 'expense'
 
-class Ledger:
+class Ledger(Features):
     def __init__(self, path):
         self.path = str(path)
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -103,6 +104,7 @@ class Ledger:
               CREATE TABLE IF NOT EXISTS entities(kind TEXT,id TEXT,data TEXT,PRIMARY KEY(kind,id));
               CREATE TABLE IF NOT EXISTS imports(hash TEXT PRIMARY KEY,created TEXT,count INTEGER);
             ''')
+            self.feature_init(db)
             if not db.execute("SELECT 1 FROM settings WHERE key='categories_initialized'").fetchone():
                 db.executemany('INSERT OR IGNORE INTO categories VALUES(?)', [(c,) for c in CATEGORIES])
                 db.execute("INSERT INTO settings VALUES('categories_initialized','1')")
@@ -218,6 +220,7 @@ class Ledger:
             db.execute('''INSERT INTO records(id,source,source_id,day,amount,category,payee,note,kind)
                 VALUES(?,?,?,?,?,?,?,?,?)''', (sid,'manual',sid,day,amount,category,
                 str(values.get('payee',''))[:300],str(values.get('note',''))[:2000],'expense'))
+            self.set_detail(db,sid,category,str(values.get('subcategory','')))
         return {'id':sid}
 
     def edit(self, values):
@@ -237,6 +240,11 @@ class Ledger:
             if category and not db.execute('SELECT 1 FROM categories WHERE name=?',(category,)).fetchone():
                 raise ValueError('Неизвестная категория')
             db.execute('UPDATE records SET decision=?,custom_category=? WHERE id=?',(decision,category,values['id']))
+            if values.get('reset_category'):
+                db.execute('UPDATE records SET custom_category=NULL WHERE id=?',(values['id'],))
+                db.execute('DELETE FROM record_details WHERE id=?',(values['id'],))
+            if 'subcategory' in values:
+                self.set_detail(db,values['id'],category or record['category'],str(values['subcategory']))
 
     def map_category(self, original, category):
         with self.db() as db:
@@ -264,6 +272,11 @@ class Ledger:
             db.execute('UPDATE records SET category=? WHERE category=?',(new,old))
             db.execute('UPDATE records SET custom_category=? WHERE custom_category=?',(new,old))
             db.execute('UPDATE mapping SET category=? WHERE category=?',(new,old))
+            if old != new:
+                db.execute('INSERT OR IGNORE INTO subcategories SELECT ?,name FROM subcategories WHERE category=?',(new,old))
+                db.execute('DELETE FROM subcategories WHERE category=?',(old,))
+                db.execute('UPDATE record_details SET category=? WHERE category=?',(new,old))
+                db.execute('UPDATE rules SET category=? WHERE category=?',(new,old))
             if old != new: db.execute('DELETE FROM categories WHERE name=?',(old,))
 
     def apply_diff(self, diff):
@@ -335,7 +348,7 @@ class Ledger:
             r['rubles'] = rubles(r['amount'])
             r['primary'] = (r['source']=='easyfinance' and r['day']<cutover) or (r['source']!='easyfinance' and r['day']>=cutover)
             r['included'] = r['primary'] and r['status']=='expense'
-        return rows
+        return self.enrich(rows)
 
     def dashboard(self, month):
         rows = self.records(month)
@@ -350,21 +363,40 @@ class Ledger:
         return {'rows':rows,'total':sum(r['rubles'] for r in included),'count':len(included),
                 'review':sum(r['primary'] and r['status']=='review' for r in rows),
                 'totals':dict(totals.most_common()),'categories':self.categories(),'mapping':mapping,'months':months,
-                'cutover':self.setting('cutover'),'last_sync':self.setting('last_sync'),'sync_error':self.setting('sync_error')}
+                'cutover':self.setting('cutover'),'last_sync':self.setting('last_sync'),'sync_error':self.setting('sync_error'),
+                **self.feature_settings()}
 
-    def reports(self, month, period='month'):
-        if period not in ('month','year'):
-            raise ValueError('Выберите месяц или год')
+    def reports(self, month, period='month', start='', end='', compare_start='', compare_end=''):
+        if period not in ('month','year','quarter','range'):
+            raise ValueError('Выберите месяц, квартал, год или диапазон')
         if len(month)!=7:
             raise ValueError('Неверный месяц')
         anchor = date.fromisoformat(month+'-01')
-        prefix = month if period=='month' else month[:4]
-        rows = [r for r in self.records(month if period=='month' else '')
-                if r['included'] and r['day'].startswith(prefix)]
-        keys = ([f'{month}-{day:02d}' for day in range(1,calendar.monthrange(anchor.year,anchor.month)[1]+1)]
-                if period=='month' else [f'{anchor.year:04d}-{m:02d}' for m in range(1,13)])
-        return {'rows':rows, 'buckets':keys, 'period':period, 'month':month,
-                'total':sum(r['rubles'] for r in rows), 'count':len(rows)}
+        if period=='range':
+            first,last=date.fromisoformat(start),date.fromisoformat(end)
+        elif period=='year': first,last=date(anchor.year,1,1),date(anchor.year,12,31)
+        elif period=='quarter':
+            m=(anchor.month-1)//3*3+1
+            first,last=date(anchor.year,m,1),date(anchor.year,m+2,calendar.monthrange(anchor.year,m+2)[1])
+        else: first,last=anchor,date(anchor.year,anchor.month,calendar.monthrange(anchor.year,anchor.month)[1])
+        if last<first or (last-first).days>3660: raise ValueError('Диапазон: от одного дня до десяти лет')
+        all_rows=[r for r in self.records() if r['included']]
+        rows=[r for r in all_rows if first.isoformat()<=r['day']<=last.isoformat()]
+        daily=period=='month' or (period=='range' and (last-first).days<62)
+        if daily: keys=[(first+timedelta(days=i)).isoformat() for i in range((last-first).days+1)]
+        else:
+            keys=[]; index=first.year*12+first.month-1
+            while index<=last.year*12+last.month-1:
+                keys.append(f'{index//12:04d}-{index%12+1:02d}');index+=1
+        comparison=[]
+        if compare_start or compare_end:
+            cs,ce=date.fromisoformat(compare_start),date.fromisoformat(compare_end)
+            if ce<cs or (ce-cs).days>3660: raise ValueError('Неверный период сравнения')
+            comparison=[r for r in all_rows if cs.isoformat()<=r['day']<=ce.isoformat()]
+        return {'rows':rows,'comparison':comparison,'compare_start':compare_start,'compare_end':compare_end,
+                'start':first.isoformat(),'end':last.isoformat(),'daily':daily,
+                'buckets':keys,'period':period,'month':month,
+                'total':sum(r['rubles'] for r in rows),'count':len(rows)}
 
     def reconcile(self, month):
         rows = self.records(month)
@@ -373,14 +405,17 @@ class Ledger:
         # Multiset matching: never collapse legitimate repeated equal purchases.
         buckets = {}
         for r in app: buckets.setdefault((r['day'],r['rubles']),[]).append(r)
-        matches, missing = [], []
+        matches, missing, exact_pairs = [], [], []
         for r in ef:
             candidates = buckets.get((r['day'],r['rubles']),[])
-            if candidates: matches.append({'easyfinance':r['id'],'app':candidates.pop()['id']})
+            if candidates:
+                other=candidates.pop()
+                matches.append({'easyfinance':r['id'],'app':other['id']})
+                exact_pairs.append({'easyfinance':r,'app':other,'exact':True})
             else: missing.append(r)
-        return {'matched':len(matches),'easyfinance_only':missing,'app_only':[r for group in buckets.values() for r in group],
+        return self.reconcile_pairs({'matched':len(matches),'exact_pairs':exact_pairs,'easyfinance_only':missing,'app_only':[r for group in buckets.values() for r in group],
                 'easyfinance_total':sum(r['rubles'] for r in ef),'app_total':sum(r['rubles'] for r in app),
-                'note':'Предварительная сверка по дате и округлённой сумме. Совпадение не доказывает идентичность покупок.'}
+                'note':'Предполагаемые пары: одинаковая сумма с разницей до 3 дней или до 1 ₽ в тот же день. Подтверждение не изменяет расходы.'})
 
     def backup(self, target):
         with self.db() as db:

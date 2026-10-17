@@ -70,7 +70,7 @@ def reply(start,status,payload,ctype='application/json; charset=utf-8',extra=Non
 
 def application(env,start):
     path, method = env.get('PATH_INFO','/'),env['REQUEST_METHOD']
-    if path=='/health': return reply(start,'200 OK',{'status':'ok','version':'0.1.0'})
+    if path=='/health': return reply(start,'200 OK',{'status':'ok','version':'0.2.0'})
     password=os.environ.get('APP_PASSWORD','')
     if len(password)<12: return reply(start,'503 Service Unavailable',{'error':'Задайте APP_PASSWORD длиной не менее 12 символов.'})
     try:
@@ -97,7 +97,7 @@ def application(env,start):
                 sessions[session]=now+86400*7
             secure='; Secure' if os.environ.get('COOKIE_SECURE','1')=='1' else ''
             return reply(start,'200 OK',{'ok':True},extra=[('Set-Cookie',f'session={session}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800{secure}')])
-        if path in ('/','/app.js','/theme.js','/style.css','/manifest.webmanifest','/icon.svg') and method=='GET':
+        if path in ('/','/app.js','/features.js','/theme.js','/style.css','/manifest.webmanifest','/icon.svg') and method=='GET':
             file=ROOT/'static'/('index.html' if path=='/' else path[1:])
             return reply(start,'200 OK',file.read_bytes(),mimetypes.guess_type(str(file))[0] or 'application/octet-stream')
         cookie=SimpleCookie()
@@ -115,7 +115,22 @@ def application(env,start):
             return reply(start,'200 OK',result)
         if path=='/api/reconcile' and method=='GET': return reply(start,'200 OK',ledger.reconcile(month))
         if path=='/api/reports' and method=='GET':
-            return reply(start,'200 OK',ledger.reports(month,query.get('period',['month'])[0]))
+            return reply(start,'200 OK',ledger.reports(month,query.get('period',['month'])[0],
+                **{key:query.get(key,[''])[0] for key in ('start','end','compare_start','compare_end')}))
+        if path=='/api/attention' and method=='GET': return reply(start,'200 OK',ledger.attention(month))
+        if path=='/api/features' and method=='GET': return reply(start,'200 OK',ledger.feature_settings())
+        if path=='/api/manual-update' and method=='POST':
+            ledger.manual_update(body)
+            return reply(start,'200 OK',{'ok':True})
+        if path=='/api/rule' and method=='POST':
+            ledger.rule(body)
+            return reply(start,'200 OK',{'ok':True})
+        if path=='/api/subcategory' and method=='POST':
+            ledger.subcategory(body)
+            return reply(start,'200 OK',{'ok':True})
+        if path=='/api/review' and method=='POST':
+            ledger.review(body)
+            return reply(start,'200 OK',{'ok':True})
         if path=='/api/import' and method=='POST':
             return reply(start,'200 OK',ledger.import_csv(base64.b64decode(body['content'],validate=True)))
         if path=='/api/manual' and method=='POST': return reply(start,'200 OK',ledger.manual(body))
@@ -129,12 +144,12 @@ def application(env,start):
         elif path=='/api/export' and method=='GET':
             stream=io.StringIO(newline='')
             writer=csv.writer(stream,delimiter=';')
-            writer.writerow(['id','источник','дата','точная сумма','учёт рублей','категория','исходная категория','счёт','описание','комментарий','статус','в отчёте'])
+            writer.writerow(['id','источник','дата','точная сумма','учёт рублей','категория','исходная категория','счёт','описание','комментарий','статус','в отчёте','подкатегория'])
             for r in ledger.records():
                 def safe(v):
                     s=str(v)
                     return "'"+s if s.startswith(('=','+','-','@','\t','\r')) else s
-                writer.writerow([safe(v) for v in [r['id'],r['source'],r['day'],f"{r['amount']//100}.{r['amount']%100:02}",r['rubles'],r['category'],r['original_category'],r['account'],r['payee'],r['note'],r['status'],r['included']]])
+                writer.writerow([safe(v) for v in [r['id'],r['source'],r['day'],f"{r['amount']//100}.{r['amount']%100:02}",r['rubles'],r['category'],r['original_category'],r['account'],r['payee'],r['note'],r['status'],r['included'],r['subcategory']]])
             return reply(start,'200 OK',stream.getvalue().encode('utf-8-sig'),'text/csv; charset=utf-8', [('Content-Disposition','attachment; filename="expenses.csv"')])
         else: return reply(start,'404 Not Found',{'error':'Не найдено'})
         return reply(start,'200 OK',{'ok':True})
