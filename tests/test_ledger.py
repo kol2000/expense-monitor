@@ -43,6 +43,41 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(rubles(cents('1347,27')),1348)
         self.assertEqual(rubles(cents('248.80')),249)
         self.assertEqual(rubles(cents('100')),100)
+
+    def test_reports_cutover_rounding_and_exclusions(self):
+        self.ledger.import_csv(export([('14-10-2026','10.01','Топливо'),('15-10-2026','99','Топливо')]))
+        self.ledger.apply_diff(self.diff([
+            self.tx('old',date='2026-10-14',outcome='88'),
+            self.tx('new',outcome='20.01'),
+            self.tx('held',outcome='30',hold=True),
+            self.tx('transfer',outcome='40',income='40',incomeAccount='b'),
+            self.tx('receipt',outcome=0,income=50)]))
+        self.ledger.manual({'day':'2026-11-02','amount':'5.01','category':'Покупки'})
+        month=self.ledger.reports('2026-10')
+        self.assertEqual((month['total'],month['count']),(32,2))
+        self.assertEqual(month['total'],self.ledger.dashboard('2026-10')['total'])
+        year=self.ledger.reports('2026-10','year')
+        self.assertEqual((year['total'],year['count']),(38,3))
+        self.assertEqual(len(year['buckets']),12)
+        self.assertEqual(len(self.ledger.reports('2024-02')['buckets']),29)
+        self.assertEqual(self.ledger.reports('2025-01')['rows'],[])
+        for month,period in [('2026-13','month'),('2026','year'),('2026-01','bad')]:
+            with self.assertRaises(ValueError):self.ledger.reports(month,period)
+
+    def test_new_categories_migrate_once_preserving_overrides(self):
+        self.ledger.import_csv(export([('01-01-2026','100','Такси'),('02-01-2026','200','Уход за собой')]))
+        with self.ledger.db() as db:
+            db.execute("DELETE FROM settings WHERE key='transport_care_v1'")
+            db.execute("UPDATE records SET category='Покупки'")
+            db.execute("UPDATE records SET custom_category='Покупки' WHERE original_category='Уход за собой'")
+        ledger=Ledger(self.ledger.path)
+        rows={r['original_category']:r for r in ledger.records()}
+        self.assertEqual(rows['Такси']['category'],'Транспорт')
+        self.assertEqual(rows['Уход за собой']['category'],'Покупки')
+        self.assertIn('Парикмахерская и уход за собой',ledger.categories())
+        ledger.map_category('Такси','Покупки')
+        ledger=Ledger(self.ledger.path)
+        self.assertEqual(next(r for r in ledger.records() if r['original_category']=='Такси')['category'],'Покупки')
         self.assertEqual(rubles(cents('0.01')),1)
         for value in ('NaN','Infinity','-1','1.001'):
             with self.assertRaises(ValueError): cents(value)

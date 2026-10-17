@@ -114,6 +114,8 @@ def application(env,start):
             result['zen_configured']=bool(os.environ.get('ZENMONEY_TOKEN'))
             return reply(start,'200 OK',result)
         if path=='/api/reconcile' and method=='GET': return reply(start,'200 OK',ledger.reconcile(month))
+        if path=='/api/reports' and method=='GET':
+            return reply(start,'200 OK',ledger.reports(month,query.get('period',['month'])[0]))
         if path=='/api/import' and method=='POST':
             return reply(start,'200 OK',ledger.import_csv(base64.b64decode(body['content'],validate=True)))
         if path=='/api/manual' and method=='POST': return reply(start,'200 OK',ledger.manual(body))

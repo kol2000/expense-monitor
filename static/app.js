@@ -33,7 +33,7 @@ function rowHTML(r,editable=false){
  ${editable?`<details class="record-editor"><summary>Изменить операцию</summary><p class="tx-original">Категория источника: ${esc(r.original_category||'Без категории')}</p><div class="record-actions"><label>Категория<select data-category="${esc(r.id)}" aria-label="Категория операции">${options(r.category)}</select></label><label>Учёт<select data-decision="${esc(r.id)}" aria-label="Учёт операции"><option value="">Как в источнике</option><option value="expense"${r.decision==='expense'?' selected':''}${r.pending||r.own_transfer?' disabled':''}>Считать расходом</option><option value="ignored"${r.decision==='ignored'?' selected':''}>Исключить</option><option value="review"${r.decision==='review'?' selected':''}>Разобрать позже</option></select></label><button data-save="${esc(r.id)}">Сохранить</button></div></details>`:''}</article>`;
 }
 
-function showPage(page){currentPage=page;document.querySelectorAll('.page').forEach(el=>el.hidden=el.id!==page);document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===page));$('pageTitle').textContent={overview:'Обзор расходов',transactions:'Все операции',reconcile:'Сверка с EasyFinance',settings:'Категории и данные'}[page];}
+function showPage(page){currentPage=page;document.querySelectorAll('.page').forEach(el=>el.hidden=el.id!==page);document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===page));$('pageTitle').textContent={overview:'Обзор расходов',transactions:'Все операции',reconcile:'Сверка с EasyFinance',settings:'Категории и данные',reports:'Отчёты'}[page];updatePeriodLabels();if(page==='reports')loadReports().catch(e=>toast(e.message));}
 function renderRows(){
  const term=$('search').value.toLocaleLowerCase(), status=$('statusFilter').value;
  const rows=data.rows.filter(r=>(status==='all'||status==='included'&&r.included||status==='review'&&r.primary&&r.status==='review'||status==='ignored'&&r.status==='ignored')&&[r.payee,r.note,r.category,r.account,r.account_to].join(' ').toLocaleLowerCase().includes(term));
@@ -48,13 +48,14 @@ function render(){
  $('mapping').innerHTML=data.mapping.map(m=>`<div class="mapping-row"><span>${esc(m.original||'Без категории')}</span><select data-map="${esc(m.original)}" aria-label="Соответствие категории ${esc(m.original)}">${options(m.category)}</select>${m.suggested&&m.suggested!=='Прочее'&&m.suggested!==m.category?`<button class="secondary" data-suggest="${esc(m.original)}" data-value="${esc(m.suggested)}">Применить: ${esc(m.suggested)}</button>`:''}</div>`).join('')||'<p class="empty">Соответствия появятся после импорта.</p>';
  $('categoryList').innerHTML=data.categories.map(c=>`<div class="category-row"><input data-rename-input="${esc(c)}" aria-label="Название категории ${esc(c)}" value="${esc(c)}" maxlength="60"><button data-rename="${esc(c)}" class="secondary">Сохранить</button></div>`).join('');
  renderRows();
+ if(currentPage==='reports')loadReports().catch(e=>toast(e.message));
 }
 async function load(){const sequence=++loadSequence;const result=await api('dashboard?month='+encodeURIComponent($('month').value));if(sequence!==loadSequence)return;data=result;$('login').hidden=true;$('workspace').hidden=false;render();}
 document.addEventListener('click',async event=>{
  const button=event.target.closest('button');if(!button)return;
  if(button.dataset.page)showPage(button.dataset.page);
  if(button.hasAttribute('data-suggest'))await busy(button,async()=>{await api('mapping',{original:button.dataset.suggest,category:button.dataset.value});await load();toast('Соответствие сохранено');});
- if(button.dataset.save){await busy(button,async()=>{const id=button.dataset.save;const select=[...document.querySelectorAll('[data-category]')].find(e=>e.dataset.category===id);const decision=[...document.querySelectorAll('[data-decision]')].find(e=>e.dataset.decision===id);await api('edit',{id,category:select.value,decision:decision.value||null});await load();toast('Операция сохранена');});}
+ if(button.dataset.save){await busy(button,async()=>{const id=button.dataset.save;const editor=button.closest('.record-actions');const select=editor.querySelector('[data-category]');const decision=editor.querySelector('[data-decision]');await api('edit',{id,category:select.value,decision:decision.value||null});await load();toast('Операция сохранена');});}
  if(button.dataset.rename){await busy(button,async()=>{const old=button.dataset.rename;const input=[...document.querySelectorAll('[data-rename-input]')].find(e=>e.dataset.renameInput===old);await api('categories',{old,name:input.value});await load();toast('Категории обновлены');});}
 });
 document.addEventListener('change',event=>{if(event.target.matches('[data-map]'))busy(event.target,async()=>{await api('mapping',{original:event.target.dataset.map,category:event.target.value});await load();toast('Соответствие сохранено');});});
@@ -63,7 +64,7 @@ $('logout').onclick=()=>busy($('logout'),async()=>{await api('logout',{});data=n
 function changeMonth(){ $('comparison').innerHTML=''; load().catch(e=>toast(e.message)); }
 function stepMonth(delta){
  const [year,month]=($('month').value||localDate().slice(0,7)).split('-').map(Number);
- const index=year*12+month-1+delta;
+ const index=year*12+month-1+delta*(currentPage==='reports'&&$('reportPeriod').value==='year'?12:1);
  const nextYear=Math.floor(index/12);
  if(nextYear<1||nextYear>9999)return;
  $('month').value=String(nextYear).padStart(4,'0')+'-'+String(index%12+1).padStart(2,'0');
@@ -89,4 +90,63 @@ $('reconcileRun').onclick=()=>busy($('reconcileRun'),async()=>{
  const r=await api('reconcile?month='+encodeURIComponent($('month').value));
  $('comparison').innerHTML=`<hr><div class="stats"><article><p>EasyFinance</p><h2>${money(r.easyfinance_total)}</h2></article><article><p>Новый учёт</p><h2>${money(r.app_total)}</h2></article><article><p>Разница</p><h2>${money(r.app_total-r.easyfinance_total)}</h2></article></div><p>Предварительно совпало: ${r.matched}. ${esc(r.note)}</p><h2>Только в EasyFinance (${r.easyfinance_only.length})</h2>${r.easyfinance_only.map(x=>rowHTML(x)).join('')||'<p class="muted">Нет расхождений</p>'}<h2>Только в новом учёте (${r.app_only.length})</h2>${r.app_only.map(x=>rowHTML(x)).join('')||'<p class="muted">Нет расхождений</p>'}`;
 });
+let reportData, reportCategory=null, reportDetail=null, reportSequence=0, reportGroups=[];
+const reportColors=['#5488dc','#e68d49','#51a58f','#ac7bcd','#d56c83','#8fa844','#41a7bd','#c69b45','#7f91ac','#b58062','#698c65','#bf75a8','#739ac1','#a99b70'];
+function detailOf(r){return !r.original_category||r.original_category===r.category?'Без уточнения':r.original_category;}
+function updatePeriodLabels(){
+ const year=currentPage==='reports'&&$('reportPeriod').value==='year';
+ for(const [id,prefix] of [['previousMonth','Предыдущий'],['nextMonth','Следующий']]){const label=prefix+(year?' год':' месяц');$(id).title=label;$(id).setAttribute('aria-label',label);}
+}
+async function loadReports(){
+ updatePeriodLabels();
+ const sequence=++reportSequence;
+ $('reportContent').innerHTML='<p class="empty">Загружаем отчёт…</p>';
+ try{
+  const result=await api('reports?month='+encodeURIComponent($('month').value)+'&period='+$('reportPeriod').value);
+  if(sequence!==reportSequence||currentPage!=='reports')return;
+  reportData=result;reportCategory=null;reportDetail=null;renderReport();
+ }catch(e){if(sequence===reportSequence)$('reportContent').innerHTML='<p class="empty">Не удалось загрузить отчёт. Попробуйте выбрать период ещё раз.</p>';throw e;}
+}
+function renderReport(){
+ const d=reportData;
+ const date=new Date(d.month+'-01T12:00:00');
+ $('reportPeriodTitle').textContent=d.period==='year'?d.month.slice(0,4)+' год':date.toLocaleDateString('ru-RU',{month:'long',year:'numeric'});
+ const rows=d.rows.filter(r=>(reportCategory===null||r.category===reportCategory)&&(reportDetail===null||detailOf(r)===reportDetail));
+ const total=rows.reduce((sum,r)=>sum+r.rubles,0);
+ const groups=new Map();
+ for(const r of rows){const name=reportCategory===null?r.category:detailOf(r);const g=groups.get(name)||{name,total:0,count:0};g.total+=r.rubles;g.count++;groups.set(name,g);}
+ reportGroups=[...groups.values()].sort((a,b)=>b.total-a.total||a.name.localeCompare(b.name,'ru'));
+ let offset=0;
+ const segments=reportGroups.filter(g=>g.total>0).map(g=>{
+  const i=reportGroups.indexOf(g), share=g.total/(total||1)*100;
+  const circle=`<circle cx="100" cy="100" r="74" fill="none" stroke="${reportColors[i%reportColors.length]}" stroke-width="28" pathLength="100" stroke-dasharray="${share} ${100-share}" stroke-dashoffset="${-offset}" transform="rotate(-90 100 100)" data-report-group="${i}"><title>${esc(g.name)}: ${money(g.total)}</title></circle>`;
+  offset+=share;return circle;
+ }).join('');
+ const legend=reportGroups.map((g,i)=>`<button class="report-legend-row" data-report-group="${i}"><span class="report-dot" data-color="${i}"></span><span class="report-name">${esc(g.name)}<small>Операций: ${g.count}</small></span><span><strong>${money(g.total)}</strong><small>${(total?g.total/total*100:0).toLocaleString('ru-RU',{maximumFractionDigits:1})}%</small></span><span aria-hidden="true">›</span></button>`).join('');
+ const buckets=d.buckets.map(key=>({key,rows:rows.filter(r=>r.day.startsWith(key))}));
+ const amounts=buckets.map(b=>b.rows.reduce((sum,r)=>sum+r.rubles,0));
+ const max=Math.max(1,...amounts);
+ const bars=buckets.map((b,i)=>{
+  const label=d.period==='year'?new Date(b.key+'-01T12:00:00').toLocaleDateString('ru-RU',{month:'short'}):b.key.slice(-2);
+  const hint=b.rows.length?money(amounts[i]):'Нет учтённых операций';
+  return `<div class="report-column" tabindex="0" aria-label="${esc(b.key+': '+hint)}"><div class="report-column-track"><div class="report-column-fill" data-height="${amounts[i]/max*100}"></div><span class="report-tooltip">${esc(label)}: ${hint}</span></div><span>${esc(label)}</span></div>`;
+ }).join('');
+ $('reportContent').innerHTML=`<div class="report-breadcrumb"><button class="secondary" data-report-back="all">Все расходы</button>${reportCategory!==null?`<span>›</span><button class="secondary" data-report-back="category">${esc(reportCategory)}</button>`:''}${reportDetail!==null?`<span>› ${esc(reportDetail)}</span>`:''}</div>
+ <article class="panel"><div class="panel-head"><h2>${esc(reportDetail??reportCategory??'Распределение расходов')}</h2><span>Операций: ${rows.length}</span></div>
+ ${rows.length?`<div class="report-distribution"><div class="report-donut"><svg viewBox="0 0 200 200" aria-hidden="true"><circle cx="100" cy="100" r="74" fill="none" stroke="#89988b33" stroke-width="28"/>${segments}</svg><div class="report-donut-total"><small>Всего за период</small><strong>${money(total)}</strong></div></div><div class="report-legend">${legend}</div></div>`:'<p class="empty">За этот период учтённых расходов нет.</p>'}
+ <p class="muted">${reportCategory===null?'Нажмите на сектор или категорию, чтобы увидеть детализацию.':'Детализация по категориям источника. Нажмите на строку, чтобы увидеть операции. «Без уточнения» — записи без дополнительной категории.'}</p></article>
+ <article class="panel"><div class="panel-head"><h2>${d.period==='year'?'Расходы по месяцам':'Расходы по дням'}</h2><span class="muted">Максимум: ${money(Math.max(0,...amounts))}</span></div><div class="report-timeline">${bars}</div><p class="muted">Сумма доступна при наведении или фокусе. Пустой столбец означает отсутствие учтённых операций, а не подтверждение полноты данных. Текущий период может быть неполным.</p></article>
+ ${reportDetail!==null?`<article class="panel"><h2>Операции: ${esc(reportDetail)}</h2>${rows.map(r=>rowHTML(r,true)).join('')}</article>`:''}`;
+ // CSSOM assignments work with the strict style-src policy; HTML style attributes do not.
+ $('reportContent').querySelector('.report-timeline').style.setProperty('--bucket-count',buckets.length);
+ $('reportContent').querySelectorAll('[data-height]').forEach(el=>el.style.height=el.dataset.height+'%');
+ $('reportContent').querySelectorAll('[data-color]').forEach(el=>el.style.backgroundColor=reportColors[Number(el.dataset.color)%reportColors.length]);
+}
+$('reportPeriod').onchange=()=>loadReports().catch(e=>toast(e.message));
+$('reportContent').onclick=event=>{
+ const group=event.target.closest('[data-report-group]');
+ if(group){const selected=reportGroups[Number(group.dataset.reportGroup)];if(!selected)return;if(reportCategory===null)reportCategory=selected.name;else reportDetail=selected.name;renderReport();return;}
+ const back=event.target.closest('[data-report-back]');
+ if(back){if(back.dataset.reportBack==='all')reportCategory=null;reportDetail=null;renderReport();}
+};
 load().catch(e=>{if(e.message!=='Войдите в приложение')toast(e.message);});

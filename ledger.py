@@ -1,5 +1,6 @@
 """Expense ledger. All stored money is integer kopecks; reports round each expense up."""
 import csv
+import calendar
 import hashlib
 import io
 import json
@@ -32,11 +33,12 @@ def valid_date(value):
 def suggested_category(label):
     text = label.casefold()
     groups = [
+        ('Парикмахерская и уход за собой', ['парикмахер', 'салон красоты', 'салоны красоты', 'уход за собой']),
         ('Семья и подарки', ['дети', 'детск', 'детей', 'подар', 'семь', 'материальная помощь']),
         ('Кафе и доставка', ['кафе', 'ресторан', 'фастфуд', 'еда вне', 'питание вне']),
         ('Продукты', ['продукт', 'супермаркет', 'питание дома']),
         ('Здоровье', ['здоров', 'медицин', 'лекарств', 'аптек']),
-        ('Транспорт', ['транспорт', 'автомоб', 'такси', 'бензин', 'парков']),
+        ('Транспорт', ['транспорт', 'автомоб', 'такси', 'бензин', 'парков', 'проезд']),
         ('Связь и подписки', ['связь', 'интернет', 'телефон', 'подписк']),
         ('Дом и быт', ['коммун', 'жиль', 'квартир', 'ремонт', 'для дома', 'быт', 'домашнее хозяйство', 'дом, уют', 'животн', 'корм']),
         ('Отдых', ['развлеч', 'отдых', 'путешеств', 'хобби', 'спорт']),
@@ -105,6 +107,18 @@ class Ledger:
                 db.executemany('INSERT OR IGNORE INTO categories VALUES(?)', [(c,) for c in CATEGORIES])
                 db.execute("INSERT INTO settings VALUES('categories_initialized','1')")
             db.execute('INSERT OR IGNORE INTO settings VALUES(?,?)', ('cutover','2026-10-15'))
+            if not db.execute("SELECT 1 FROM settings WHERE key='transport_care_v1'").fetchone():
+                db.executemany('INSERT OR IGNORE INTO categories VALUES(?)',
+                               [('Транспорт',), ('Парикмахерская и уход за собой',)])
+                # Only unambiguous source labels move; individual overrides remain intact.
+                for original, category in [
+                    ('Такси','Транспорт'), ('Общественный транспорт','Транспорт'),
+                    ('Проезд, транспорт','Транспорт'), ('Проезд','Транспорт'),
+                    ('Салоны красоты и парикмахерские','Парикмахерская и уход за собой'),
+                    ('Уход за собой','Парикмахерская и уход за собой')]:
+                    db.execute('UPDATE mapping SET category=? WHERE original=?',(category,original))
+                    db.execute('UPDATE records SET category=? WHERE original_category=?',(category,original))
+                db.execute("INSERT INTO settings VALUES('transport_care_v1','1')")
             if not db.execute("SELECT 1 FROM settings WHERE key='zen_categories_v2'").fetchone():
                 for row in db.execute("SELECT * FROM records WHERE source='zenmoney'").fetchall():
                     original = zen_category_key(row['original_category'], row['payee'])
@@ -337,6 +351,20 @@ class Ledger:
                 'review':sum(r['primary'] and r['status']=='review' for r in rows),
                 'totals':dict(totals.most_common()),'categories':self.categories(),'mapping':mapping,'months':months,
                 'cutover':self.setting('cutover'),'last_sync':self.setting('last_sync'),'sync_error':self.setting('sync_error')}
+
+    def reports(self, month, period='month'):
+        if period not in ('month','year'):
+            raise ValueError('Выберите месяц или год')
+        if len(month)!=7:
+            raise ValueError('Неверный месяц')
+        anchor = date.fromisoformat(month+'-01')
+        prefix = month if period=='month' else month[:4]
+        rows = [r for r in self.records(month if period=='month' else '')
+                if r['included'] and r['day'].startswith(prefix)]
+        keys = ([f'{month}-{day:02d}' for day in range(1,calendar.monthrange(anchor.year,anchor.month)[1]+1)]
+                if period=='month' else [f'{anchor.year:04d}-{m:02d}' for m in range(1,13)])
+        return {'rows':rows, 'buckets':keys, 'period':period, 'month':month,
+                'total':sum(r['rubles'] for r in rows), 'count':len(rows)}
 
     def reconcile(self, month):
         rows = self.records(month)
