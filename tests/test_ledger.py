@@ -125,7 +125,7 @@ class LedgerTests(unittest.TestCase):
             for row in db.execute("SELECT id,raw FROM records").fetchall():
                 raw=json.loads(row['raw']);raw['_blocked']=True
                 db.execute("UPDATE records SET kind='review',raw=? WHERE id=?",(json.dumps(raw),row['id']))
-            db.execute("DELETE FROM settings WHERE key='rub_only_v1'")
+            db.execute("DELETE FROM settings WHERE key='owned_transfers_v2'")
         upgraded=Ledger(self.ledger.path)
         rows={r['source_id']:r for r in upgraded.records()}
         self.assertEqual(rows['buy']['status'],'expense')
@@ -136,6 +136,23 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(upgraded.setting('zen_cursor'),'1')
         self.assertEqual(upgraded.dashboard('2026-10')['total'],1348)
         self.assertEqual(Ledger(self.ledger.path).dashboard('2026-10')['total'],1348)
+    def test_pending_own_transfer_never_counts_as_expense(self):
+        self.ledger.apply_diff(self.diff([self.tx('saving',outcome=250,income=250,incomeAccount='b',hold=True),self.tx('purchase',outcome=2250,hold=True)]))
+        rows={r['source_id']:r for r in self.ledger.records()}
+        self.assertEqual(rows['saving']['status'],'ignored')
+        self.assertTrue(rows['saving']['own_transfer'])
+        self.assertEqual(rows['saving']['account_to'],'Мой счёт')
+        self.assertEqual(self.ledger.dashboard('2026-10')['review'],1)
+        with self.assertRaisesRegex(ValueError,'между своими'):
+            self.ledger.edit({'id':'zm:saving','decision':'expense'})
+        self.ledger.apply_diff(self.diff([self.tx('saving',outcome=250,income=250,incomeAccount='b',hold=False),self.tx('purchase',outcome=2250,hold=False)],2))
+        self.assertEqual(self.ledger.dashboard('2026-10')['total'],2250)
+    def test_transfer_recognized_when_account_metadata_arrives_later(self):
+        self.ledger.apply_diff({'serverTimestamp':1,'transaction':[self.tx('saving',outcome=250,income=250,incomeAccount='b',hold=True)]})
+        self.assertEqual(self.ledger.records()[0]['status'],'review')
+        self.ledger.apply_diff(self.diff([],2))
+        self.assertEqual(self.ledger.records()[0]['status'],'ignored')
+        self.assertEqual(self.ledger.dashboard('2026-10')['review'],0)
     def test_category_merge_and_backup(self):
         self.ledger.manual({'day':'2026-10-15','amount':'1.01','category':'Продукты'})
         self.ledger.rename_category('Продукты','Покупки')

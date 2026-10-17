@@ -56,11 +56,19 @@ def zen_category_key(original, payee):
         return 'Дзен-мани: МТС (связь)'
     return original
 
+def own_transfer(item, entities):
+    oa, ia = str(item.get('outcomeAccount','')), str(item.get('incomeAccount',''))
+    account, other = entities.get(('account',oa),{}), entities.get(('account',ia),{})
+    return bool(cents(item.get('outcome',0)) and cents(item.get('income',0)) and oa != ia
+                and account and other and account.get('type') != 'debt' and other.get('type') != 'debt')
+
 def zen_kind(item, entities, original):
     """All imported amounts are RUB; only settlement and transfer evidence affect review."""
     out, inc = cents(item.get('outcome', 0)), cents(item.get('income', 0))
     if not out:
         return 'income'
+    if own_transfer(item, entities):
+        return 'ignored'
     if item.get('hold'):
         return 'review'
     oa, ia = str(item.get('outcomeAccount', '')), str(item.get('incomeAccount', ''))
@@ -108,14 +116,14 @@ class Ledger:
                     db.execute('UPDATE records SET original_category=?,category=? WHERE id=?',
                                (original, category if row['category']=='Прочее' else row['category'], row['id']))
                 db.execute("INSERT INTO settings VALUES('zen_categories_v2','1')")
-            if not db.execute("SELECT 1 FROM settings WHERE key='rub_only_v1'").fetchone():
+            if not db.execute("SELECT 1 FROM settings WHERE key='owned_transfers_v2'").fetchone():
                 entities = {(r['kind'],r['id']):json.loads(r['data']) for r in db.execute('SELECT * FROM entities')}
                 for row in db.execute("SELECT * FROM records WHERE source='zenmoney'").fetchall():
                     raw = json.loads(row['raw'])
                     raw['_blocked'] = bool(cents(raw.get('outcome',0)) and raw.get('hold'))
                     db.execute('UPDATE records SET kind=?,raw=? WHERE id=?',
                                (zen_kind(raw,entities,row['original_category']),json.dumps(raw,ensure_ascii=False),row['id']))
-                db.execute("INSERT INTO settings VALUES('rub_only_v1','1')")
+                db.execute("INSERT INTO settings VALUES('owned_transfers_v2','1')")
 
 
     @contextmanager
@@ -203,6 +211,9 @@ class Ledger:
             record = db.execute('SELECT * FROM records WHERE id=?',(values['id'],)).fetchone()
             if not record:
                 raise ValueError('Операция не найдена')
+            entities = {(r['kind'],r['id']):json.loads(r['data']) for r in db.execute('SELECT * FROM entities')}
+            if values.get('decision')=='expense' and record['source']=='zenmoney' and own_transfer(json.loads(record['raw']),entities):
+                raise ValueError('Перевод между своими счетами не является расходом.')
             decision = values.get('decision')
             if decision not in (None,'expense','ignored','review'):
                 raise ValueError('Неизвестное решение')
@@ -289,13 +300,19 @@ class Ledger:
             if len(month)!=7: raise ValueError('Неверный месяц')
         with self.db() as db:
             rows = [dict(r) for r in db.execute('SELECT * FROM records WHERE deleted=0 AND day LIKE ? ORDER BY day DESC,id',(month+'%',))]
+            entities = {(r['kind'],r['id']):json.loads(r['data']) for r in db.execute('SELECT * FROM entities')}
         cutover = self.setting('cutover')
         for r in rows:
             raw = json.loads(r.pop('raw'))
             # Keep the expense amount unchanged; display receipts separately, including old imports.
             r['display_amount'] = cents(raw.get('income',0)) if r['source']=='zenmoney' and r['kind']=='income' else r['amount']
             r['display_currency'] = 'RUB'
-            r['status'] = r['decision'] or r['kind']
+            r['own_transfer'] = r['source']=='zenmoney' and own_transfer(raw,entities)
+            r['pending'] = bool(raw.get('hold')) and not r['own_transfer']
+            r['account_to'] = entities.get(('account',str(raw.get('incomeAccount',''))),{}).get('title','') if r['own_transfer'] else ''
+            if r['own_transfer']:
+                r['kind'] = 'ignored'
+            r['status'] = 'ignored' if r['own_transfer'] else r['decision'] or r['kind']
             r['review_reason'] = ''
             if r['status']=='review':
                 r['review_reason'] = ('Ожидает окончательного списания банком. Обновится из Дзен-мани.'

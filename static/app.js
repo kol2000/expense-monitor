@@ -16,17 +16,27 @@ async function busy(button,fn){button.disabled=true;try{await fn();}catch(e){toa
 function options(selected){return data.categories.map(c=>`<option${c===selected?' selected':''}>${esc(c)}</option>`).join('');}
 function sourceLabel(source){return {easyfinance:'EasyFinance',zenmoney:'Дзен-мани',manual:'Вручную'}[source]||source;}
 function rowHTML(r,editable=false){
- const statuses={expense:'Расход',review:'Нужно разобрать',ignored:'Исключено',income:'Поступление'};
+ const statuses={expense:'Расход',review:r.pending?'Ожидает списания':'Нужно разобрать',ignored:r.own_transfer?'Перевод между счетами':'Исключено',income:'Поступление'};
  const exact=((r.display_amount??r.amount)/100).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2});
  const receipt=r.kind==='income';
- const unit=receipt?(r.display_currency==='RUB'?'₽':esc(r.display_currency||'?')):'₽';
- const headline=receipt?`+${exact} ${unit}`:money(r.rubles);
- return `<div class="transaction"><div><strong>${esc(r.payee||r.category)}</strong><small>${esc(r.day.split('-').reverse().join('.'))} · ${esc(r.category)} · ${esc(r.account||sourceLabel(r.source))}</small>${r.review_reason?`<small>${esc(r.review_reason)}</small>`:''}${r.note?`<small>${esc(r.note)}</small>`:''}${editable?`<small><span class="badge ${r.status==='review'?'review':''}">${esc(statuses[r.status]||r.status)}</span>${esc(sourceLabel(r.source))}${!r.primary?' · Только для сверки':''}</small>`:''}</div><div class="amount"><strong>${headline}</strong>${receipt?'':`<small>Точно: ${exact} ₽</small>`}</div>${editable?`<details class="record-editor"><summary>Изменить</summary><small>Категория источника: ${esc(r.original_category||'Без категории')}</small><div class="record-actions"><select data-category="${esc(r.id)}" aria-label="Категория операции">${options(r.category)}</select><select data-decision="${esc(r.id)}" aria-label="Учёт операции"><option value="">Как в источнике</option><option value="expense"${r.decision==='expense'?' selected':''}>Считать расходом</option><option value="ignored"${r.decision==='ignored'?' selected':''}>Исключить</option><option value="review"${r.decision==='review'?' selected':''}>Разобрать позже</option></select><button data-save="${esc(r.id)}">Сохранить</button></div></details>`:''}</div>`;
+ const headline=receipt?`+${exact} ₽`:money(r.rubles);
+ const title=r.own_transfer?'Перевод между своими счетами':r.payee||r.category;
+ const account=r.own_transfer?`${r.account} → ${r.account_to}`:r.account||'Не указан';
+ const date=r.day.split('-').reverse().join('.');
+ const accounting=r.own_transfer?'Не входит в расходы':!r.primary?'Только для сверки':r.included?'Входит в расходы':r.status==='income'?'Не уменьшает расходы':'Не входит в расходы';
+ const reason=r.status==='review'?(r.pending?'Банк обрабатывает покупку. После проведения она обновится автоматически.':r.review_reason):'';
+ return `<article class="transaction transaction-${esc(r.status)}">
+ <div class="tx-main"><div class="tx-status"><span class="badge ${r.status==='review'?'review':''}">${esc(statuses[r.status]||r.status)}</span><span class="tx-source">${esc(sourceLabel(r.source))}</span></div><h3 class="tx-title">${esc(title)}</h3></div>
+ <div class="amount"><strong>${headline}</strong><span class="tx-accounting">${accounting}</span>${!receipt&&r.amount!==r.rubles*100?`<span class="tx-exact">До округления: ${exact} ₽</span>`:''}</div>
+ <dl class="tx-meta"><div><dt>Дата</dt><dd>${esc(date)}</dd></div>${!r.own_transfer?`<div><dt>Категория</dt><dd>${esc(r.category)}</dd></div>`:''}<div class="tx-account"><dt>${r.own_transfer?'Откуда → куда':'Счёт'}</dt><dd>${esc(account)}</dd></div></dl>
+ ${reason?`<p class="tx-notice">${esc(reason)}</p>`:''}${r.note?`<p class="tx-note"><span>Комментарий</span>${esc(r.note)}</p>`:''}
+ ${editable?`<details class="record-editor"><summary>Изменить операцию</summary><p class="tx-original">Категория источника: ${esc(r.original_category||'Без категории')}</p><div class="record-actions"><label>Категория<select data-category="${esc(r.id)}" aria-label="Категория операции">${options(r.category)}</select></label><label>Учёт<select data-decision="${esc(r.id)}" aria-label="Учёт операции"><option value="">Как в источнике</option><option value="expense"${r.decision==='expense'?' selected':''}${r.pending||r.own_transfer?' disabled':''}>Считать расходом</option><option value="ignored"${r.decision==='ignored'?' selected':''}>Исключить</option><option value="review"${r.decision==='review'?' selected':''}>Разобрать позже</option></select></label><button data-save="${esc(r.id)}">Сохранить</button></div></details>`:''}</article>`;
 }
+
 function showPage(page){currentPage=page;document.querySelectorAll('.page').forEach(el=>el.hidden=el.id!==page);document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===page));$('pageTitle').textContent={overview:'Обзор расходов',transactions:'Все операции',reconcile:'Сверка с EasyFinance',settings:'Категории и данные'}[page];}
 function renderRows(){
  const term=$('search').value.toLocaleLowerCase(), status=$('statusFilter').value;
- const rows=data.rows.filter(r=>(status==='all'||status==='included'&&r.included||status==='review'&&r.primary&&r.status==='review'||status==='ignored'&&r.status==='ignored')&&[r.payee,r.note,r.category,r.account].join(' ').toLocaleLowerCase().includes(term));
+ const rows=data.rows.filter(r=>(status==='all'||status==='included'&&r.included||status==='review'&&r.primary&&r.status==='review'||status==='ignored'&&r.status==='ignored')&&[r.payee,r.note,r.category,r.account,r.account_to].join(' ').toLocaleLowerCase().includes(term));
  $('rows').innerHTML=rows.length?rows.map(r=>rowHTML(r,true)).join(''):'<p class="empty">За этот период подходящих операций нет.</p>';
 }
 function render(){
