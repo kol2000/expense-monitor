@@ -3,7 +3,7 @@ const $ = id => document.getElementById(id);
 const money = n => new Intl.NumberFormat('ru-RU',{maximumFractionDigits:0}).format(n)+' ₽';
 const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const localDate = () => new Date().toLocaleDateString('sv-SE');
-let data, currentPage='overview', toastTimer;
+let data, currentPage='overview', toastTimer, loadSequence=0;
 $('month').value=localDate().slice(0,7);
 function toast(message){$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,6500);}
 async function api(path,body){
@@ -49,7 +49,7 @@ function render(){
  $('categoryList').innerHTML=data.categories.map(c=>`<div class="category-row"><input data-rename-input="${esc(c)}" aria-label="Название категории ${esc(c)}" value="${esc(c)}" maxlength="60"><button data-rename="${esc(c)}" class="secondary">Сохранить</button></div>`).join('');
  renderRows();
 }
-async function load(){data=await api('dashboard?month='+encodeURIComponent($('month').value));$('login').hidden=true;$('workspace').hidden=false;render();}
+async function load(){const sequence=++loadSequence;const result=await api('dashboard?month='+encodeURIComponent($('month').value));if(sequence!==loadSequence)return;data=result;$('login').hidden=true;$('workspace').hidden=false;render();}
 document.addEventListener('click',async event=>{
  const button=event.target.closest('button');if(!button)return;
  if(button.dataset.page)showPage(button.dataset.page);
@@ -60,7 +60,18 @@ document.addEventListener('click',async event=>{
 document.addEventListener('change',event=>{if(event.target.matches('[data-map]'))busy(event.target,async()=>{await api('mapping',{original:event.target.dataset.map,category:event.target.value});await load();toast('Соответствие сохранено');});});
 $('loginForm').onsubmit=event=>{event.preventDefault();busy(event.submitter,async()=>{await api('login',{password:new FormData(event.target).get('password')});event.target.reset();await load();});};
 $('logout').onclick=()=>busy($('logout'),async()=>{await api('logout',{});data=null;$('workspace').hidden=true;$('login').hidden=false;});
-$('month').onchange=()=>load().catch(e=>toast(e.message));
+function changeMonth(){ $('comparison').innerHTML=''; load().catch(e=>toast(e.message)); }
+function stepMonth(delta){
+ const [year,month]=($('month').value||localDate().slice(0,7)).split('-').map(Number);
+ const index=year*12+month-1+delta;
+ const nextYear=Math.floor(index/12);
+ if(nextYear<1||nextYear>9999)return;
+ $('month').value=String(nextYear).padStart(4,'0')+'-'+String(index%12+1).padStart(2,'0');
+ changeMonth();
+}
+$('month').onchange=changeMonth;
+$('previousMonth').onclick=()=>stepMonth(-1);
+$('nextMonth').onclick=()=>stepMonth(1);
 $('search').oninput=renderRows;$('statusFilter').onchange=renderRows;
 $('reviewOpen').onclick=()=>{$('statusFilter').value='review';showPage('transactions');renderRows();};
 $('add').onclick=()=>{$('expenseForm').reset();$('expenseForm').elements.day.value=localDate();$('expenseDialog').showModal();};
