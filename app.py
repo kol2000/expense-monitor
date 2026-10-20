@@ -70,7 +70,7 @@ def reply(start,status,payload,ctype='application/json; charset=utf-8',extra=Non
 
 def application(env,start):
     path, method = env.get('PATH_INFO','/'),env['REQUEST_METHOD']
-    if path=='/health': return reply(start,'200 OK',{'status':'ok','version':'0.2.0'})
+    if path=='/health': return reply(start,'200 OK',{'status':'ok','version':'0.2.1'})
     password=os.environ.get('APP_PASSWORD','')
     if len(password)<12: return reply(start,'503 Service Unavailable',{'error':'Задайте APP_PASSWORD длиной не менее 12 символов.'})
     try:

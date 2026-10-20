@@ -4,6 +4,7 @@ import calendar
 import hashlib
 import io
 import json
+import re
 import sqlite3
 import uuid
 from collections import Counter
@@ -65,6 +66,20 @@ def own_transfer(item, entities):
     return bool(cents(item.get('outcome',0)) and cents(item.get('income',0)) and oa != ia
                 and account and other and account.get('type') != 'debt' and other.get('type') != 'debt')
 
+def transfer_hint(item, original):
+    """Conservative review hints, never proof that a transfer is an expense."""
+    text = ' '.join(str(value or '') for value in
+                    (original, item.get('payee'), item.get('comment'))).casefold()
+    if any(word in text for word in ('перевод', 'сбп', 'transfer', 'card2card', 'p2p')):
+        return True
+    payee = str(item.get('payee') or '').strip()
+    # Russian personal names with initials or a patronymic. Do not classify
+    # arbitrary two-word merchant names as people.
+    initials = r'[А-ЯЁа-яё][а-яё-]+\s+(?:[А-ЯЁа-яё][а-яё-]+\s+)?[А-ЯЁа-яё]\.(?:\s*[А-ЯЁа-яё]\.)?'
+    patronymic = r'(?:[А-ЯЁа-яё][а-яё-]+\s+){1,2}[А-ЯЁа-яё][а-яё-]*(?:вич|вна|ична)(?:\s+[А-ЯЁа-яё][а-яё-]+)?'
+    return bool(re.fullmatch(initials, payee) or re.fullmatch(patronymic, payee))
+
+
 def zen_kind(item, entities, original):
     """All imported amounts are RUB; only settlement and transfer evidence affect review."""
     out, inc = cents(item.get('outcome', 0)), cents(item.get('income', 0))
@@ -78,7 +93,7 @@ def zen_kind(item, entities, original):
     account, other = entities.get(('account', oa), {}), entities.get(('account', ia), {})
     if inc > 0 and oa != ia:
         return 'ignored' if account and other and account.get('type') != 'debt' and other.get('type') != 'debt' else 'review'
-    if any(word in (original+' '+str(item.get('payee', ''))).casefold() for word in ('перевод', 'сбп', 'transfer')):
+    if transfer_hint(item, original):
         return 'review'
     return 'expense'
 
@@ -302,7 +317,7 @@ class Ledger(Features):
                 item = dict(item)
                 item['_blocked'] = bool(out and item.get('hold'))
                 if item['_blocked']:
-                    db.execute("UPDATE records SET decision=NULL WHERE source='zenmoney' AND source_id=?",(sid,))
+                    db.execute("UPDATE records SET decision=NULL WHERE source='zenmoney' AND source_id=? AND decision='expense'",(sid,))
                 mapped = db.execute('SELECT category FROM mapping WHERE original=?',(original,)).fetchone()
                 category = mapped[0] if mapped else available_category(db,suggested_category(original))
                 db.execute('INSERT OR IGNORE INTO mapping VALUES(?,?)',(original,category))
@@ -331,6 +346,9 @@ class Ledger(Features):
         cutover = self.setting('cutover')
         for r in rows:
             raw = json.loads(r.pop('raw'))
+            # Re-evaluate saved imports too, without overwriting explicit decisions.
+            if r['source']=='zenmoney':
+                r['kind'] = zen_kind(raw, entities, r['original_category'])
             # Keep the expense amount unchanged; display receipts separately, including old imports.
             r['display_amount'] = cents(raw.get('income',0)) if r['source']=='zenmoney' and r['kind']=='income' else r['amount']
             r['display_currency'] = 'RUB'
@@ -343,7 +361,7 @@ class Ledger(Features):
             r['review_reason'] = ''
             if r['status']=='review':
                 r['review_reason'] = ('Ожидает окончательного списания банком. Обновится из Дзен-мани.'
-                                      if raw.get('hold') else 'Проверьте, является ли операция расходом или переводом.')
+                                      if raw.get('hold') else 'Возможный перевод физлицу. Выберите «Считать расходом» или «Не учитывать». До решения в расходы не входит.')
             r['category'] = r['custom_category'] or r['category']
             r['rubles'] = rubles(r['amount'])
             r['primary'] = (r['source']=='easyfinance' and r['day']<cutover) or (r['source']!='easyfinance' and r['day']>=cutover)

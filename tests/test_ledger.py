@@ -44,6 +44,40 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(rubles(cents('248.80')),249)
         self.assertEqual(rubles(cents('100')),100)
 
+    def test_person_transfers_review_saved_imports_and_keep_decisions(self):
+        l = self.ledger
+        txs = [self.tx('comment', payee='Получатель', comment='Перевод по номеру телефона'),
+               self.tx('initials', payee='Анна Сергеевна П.'),
+               self.tx('name', payee='Иван Петрович Иванов'),
+               self.tx('own', income='1347.27', incomeAccount='b'),
+               self.tx('shop', payee='Пятёрочка')]
+        l.apply_diff(self.diff(txs))
+        # Existing records classified by an older version are re-evaluated.
+        with l.db() as db:
+            db.execute("UPDATE records SET kind='expense'")
+        rows = {r['source_id']: r for r in l.records()}
+        for sid in ('comment', 'initials', 'name'):
+            self.assertEqual(rows[sid]['status'], 'review')
+            self.assertFalse(rows[sid]['included'])
+        self.assertEqual(rows['own']['status'], 'ignored')
+        self.assertTrue(rows['shop']['included'])
+        l.edit({'id':'zm:comment', 'decision':'ignored'})
+        l.edit({'id':'zm:initials', 'decision':'expense'})
+        l.apply_diff(self.diff(txs, 2))
+        rows = {r['source_id']: r for r in l.records()}
+        self.assertEqual(rows['comment']['status'], 'ignored')
+        self.assertTrue(rows['initials']['included'])
+        sid = l.manual({'day':'2026-10-21', 'amount':'1000', 'category':'Семья и подарки',
+                        'payee':'Отец', 'note':'Перевод по СБП'})['id']
+        self.assertTrue(next(r for r in l.records() if r['id']==sid)['included'])
+
+    def test_ignored_pending_transfer_stays_ignored_on_sync(self):
+        tx = self.tx(payee='Анна П.', hold=True)
+        self.ledger.apply_diff(self.diff([tx]))
+        self.ledger.edit({'id':'zm:one', 'decision':'ignored'})
+        self.ledger.apply_diff(self.diff([tx], 2))
+        self.assertEqual(self.ledger.records()[0]['status'], 'ignored')
+
     def test_rules_priority_override_and_sync(self):
         l=self.ledger
         l.subcategory({'category':'Покупки','name':'Техника'})
