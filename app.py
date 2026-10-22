@@ -70,7 +70,7 @@ def reply(start,status,payload,ctype='application/json; charset=utf-8',extra=Non
 
 def application(env,start):
     path, method = env.get('PATH_INFO','/'),env['REQUEST_METHOD']
-    if path=='/health': return reply(start,'200 OK',{'status':'ok','version':'0.2.4'})
+    if path=='/health': return reply(start,'200 OK',{'status':'ok','version':'0.3.0'})
     password=os.environ.get('APP_PASSWORD','')
     if len(password)<12: return reply(start,'503 Service Unavailable',{'error':'Задайте APP_PASSWORD длиной не менее 12 символов.'})
     try:
@@ -97,7 +97,7 @@ def application(env,start):
                 sessions[session]=now+86400*7
             secure='; Secure' if os.environ.get('COOKIE_SECURE','1')=='1' else ''
             return reply(start,'200 OK',{'ok':True},extra=[('Set-Cookie',f'session={session}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800{secure}')])
-        if path in ('/','/app.js','/features.js','/theme.js','/style.css','/manifest.webmanifest','/icon.svg') and method=='GET':
+        if path in ('/','/app.js','/features.js','/improvements.js','/theme.js','/style.css','/manifest.webmanifest','/icon.svg') and method=='GET':
             file=ROOT/'static'/('index.html' if path=='/' else path[1:])
             return reply(start,'200 OK',file.read_bytes(),mimetypes.guess_type(str(file))[0] or 'application/octet-stream')
         cookie=SimpleCookie()
@@ -118,6 +118,14 @@ def application(env,start):
             return reply(start,'200 OK',ledger.reports(month,query.get('period',['month'])[0],
                 **{key:query.get(key,[''])[0] for key in ('start','end','compare_start','compare_end')}))
         if path=='/api/attention' and method=='GET': return reply(start,'200 OK',ledger.attention(month))
+        if path=='/api/history' and method=='GET': return reply(start,'200 OK',ledger.history())
+        if path=='/api/insights' and method=='GET': return reply(start,'200 OK',ledger.insights(month))
+        if path=='/api/undo' and method=='POST':
+            ledger.undo(body)
+            return reply(start,'200 OK',{'ok':True})
+        if path=='/api/split' and method=='POST':
+            ledger.split(body)
+            return reply(start,'200 OK',{'ok':True})
         if path=='/api/features' and method=='GET': return reply(start,'200 OK',ledger.feature_settings())
         if path=='/api/manual-update' and method=='POST':
             ledger.manual_update(body)
@@ -145,7 +153,7 @@ def application(env,start):
             stream=io.StringIO(newline='')
             writer=csv.writer(stream,delimiter=';')
             writer.writerow(['id','источник','дата','точная сумма','учёт рублей','категория','исходная категория','счёт','описание','комментарий','статус','в отчёте','подкатегория'])
-            for r in ledger.records():
+            for r in ledger.expense_parts(ledger.records()):
                 def safe(v):
                     s=str(v)
                     return "'"+s if s.startswith(('=','+','-','@','\t','\r')) else s

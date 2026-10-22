@@ -2,7 +2,7 @@ FROM python:3.13-slim
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && useradd --uid 10001 --create-home app
-COPY app.py ledger.py features.py ./
+COPY app.py ledger.py features.py improvements.py ./
 COPY static ./static
 RUN mkdir /data && chown app:app /data
 USER app

@@ -71,3 +71,14 @@ html[data-skin]:not([data-skin="forest"]) #toast{background:var(--accent);color:
 html[data-skin]:not([data-skin="forest"]) .skin-choice{background:var(--surface);color:var(--text);border-color:var(--line)}
 html[data-skin]:not([data-skin="forest"]) .badge.review,html[data-skin]:not([data-skin="forest"]) .tx-notice{background:#fff0d5;color:#714f16}
 .appearance-modes button[aria-pressed="true"]{outline-color:var(--link,#548066)}
+
+.operation-filters{display:flex;gap:14px;flex-wrap:wrap}.operation-filters label{flex:1;min-width:150px}.operation-filters select{max-width:100%}
+.day-group{margin:22px 0}.compact-operation{border-bottom:1px solid var(--line,#89988b55);padding:12px 0}.compact-operation>summary{cursor:pointer;display:grid;grid-template-columns:2fr 1.3fr auto auto;gap:12px;align-items:center}.compact-operation>summary span{overflow-wrap:anywhere}.compact-operation>summary small{color:var(--muted,inherit)}
+.remember-choice input{width:auto}.sync-warning{padding:14px;border:1px solid #b18125;border-radius:10px;background:#fff0d5;color:#714f16}.sync-summary{font-size:13px;color:var(--muted,inherit);margin-bottom:16px}
+.insight-line{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--line,#89988b55)}.history-entry{padding:20px 0;border-bottom:1px solid var(--line,#89988b55)}
+#splitDialog{width:780px;max-height:90dvh;overflow:auto}.split-part{display:grid;grid-template-columns:1fr 1.5fr 1.5fr;gap:12px;border-bottom:1px solid var(--line,#89988b55);padding:10px 0}.split-part label{min-width:0}.split-part button{grid-column:1/-1}#mappingDialog{max-height:90dvh;overflow:auto}
+@media(max-width:700px){.compact-operation>summary{grid-template-columns:1fr auto}.split-part{grid-template-columns:1fr}.history-entry .panel-head{flex-wrap:wrap}.operation-filters{display:grid;grid-template-columns:1fr 1fr}.operation-filters label{min-width:0}}
+
+.operation-filters select{width:100%;min-width:0}.sync-warning,.sync-summary{margin-bottom:18px}
+
+.compact-operation>summary>span:first-child::before{content:"› ";font-weight:700}.compact-operation[open]>summary>span:first-child::before{content:"⌄ "}

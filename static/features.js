@@ -21,7 +21,7 @@ function comparisonHTML(d,rows){
 }
 // Feature controls live in the existing settings page.
 $('settings').insertAdjacentHTML('beforeend',`<article class="panel"><h2>Подкатегории</h2><p>Можно оставить расход без уточнения. Переименование в существующее название объединит подкатегории.</p><form id="subForm" class="feature-form"><label>Категория<select id="subParent" name="category"></select></label><label>Название<input name="name" maxlength="60" required></label><button>Добавить подкатегорию</button></form><div id="subList"></div></article>
-<article class="panel"><h2>Правила для получателей</h2><p>Применяются к операциям Дзен-мани без индивидуального назначения категории. Если подходят несколько правил, используется первое в списке. Изменение или удаление правила сразу пересчитывает классификацию истории.</p><form id="ruleForm" class="feature-form"><input type="hidden" name="id"><label>Получатель<input name="pattern" maxlength="300" required></label><label>Совпадение<select name="mode"><option value="exact">Полное название</option><option value="contains">Содержит текст</option></select></label><label>Категория<select id="ruleCategory" name="category"></select></label><label>Подкатегория<select id="ruleSub" name="subcategory"></select></label><button>Сохранить правило</button><button type="button" id="ruleCancel" class="secondary">Сбросить форму</button></form><div id="ruleList"></div></article>
+<article class="panel"><h2>Правила для получателей</h2><p>Применяются к операциям Дзен-мани без индивидуального назначения категории. Правила, запомненные из операции, имеют приоритет; затем используется первое совпавшее правило в списке. Изменение или удаление правила сразу пересчитывает классификацию истории.</p><form id="ruleForm" class="feature-form"><input type="hidden" name="id"><label>Получатель<input name="pattern" maxlength="300" required></label><label>Совпадение<select name="mode"><option value="exact">Полное название</option><option value="contains">Содержит текст</option></select></label><label>Категория<select id="ruleCategory" name="category"></select></label><label>Подкатегория<select id="ruleSub" name="subcategory"></select></label><button>Сохранить правило</button><button type="button" id="ruleCancel" class="secondary">Сбросить форму</button></form><div id="ruleList"></div></article>
 <article class="panel"><h2>Корзина ручных расходов</h2><p>Удалённые вручную записи не входят в отчёты. Их можно восстановить.</p><div id="trashList"></div></article>
 <article class="panel"><h2>На телефоне</h2><p>Откройте приложение в браузере телефона и выберите «Добавить на главный экран». Для установки как отдельного приложения может потребоваться HTTPS. Черновик расхода сохраняется только в этом браузере; очистка данных браузера удалит его.</p></article>`);
 $('expenseForm').insertAdjacentHTML('afterbegin','<input type="hidden" name="id">');
@@ -34,7 +34,7 @@ function renderFeatures(){
  $('manualSub').innerHTML=subOptions($('manualCategory').value);
  $('ruleSub').innerHTML=subOptions($('ruleCategory').value,$('ruleSub').value);
  $('subList').innerHTML=data.subcategories.map((s,i)=>`<div class="category-row"><span>${esc(s.category)}</span><input data-sub-name="${i}" value="${esc(s.name)}" maxlength="60" aria-label="Название подкатегории"><button data-sub-rename="${i}" class="secondary">Переименовать</button></div>`).join('');
- $('ruleList').innerHTML=data.rules.map(r=>`<div class="rule-row"><div><strong>${esc(r.pattern)}</strong><p>${r.mode==='exact'?'Полное совпадение':'Содержит'} → ${esc(r.category)}${r.subcategory?' / '+esc(r.subcategory):''}</p></div><button data-rule-edit="${r.id}" class="secondary">Изменить</button><button data-rule-delete="${r.id}" class="quiet">Удалить правило</button></div>`).join('')||'<p>Правил пока нет.</p>';
+ $('ruleList').innerHTML=data.rules.map(r=>`<div class="rule-row"><div><strong>${esc(r.pattern)}</strong><p>${r.mode==='exact'?'Полное совпадение':'Содержит'} → ${esc(r.category)}${r.subcategory?' / '+esc(r.subcategory):''} · ${esc({'':'Только категория',review:'Всегда на разбор',expense:'Считать расходом',ignored:'Не учитывать'}[r.action||''])}</p></div><button data-rule-edit="${r.id}" class="secondary">Изменить</button><button data-rule-delete="${r.id}" class="quiet">Удалить правило</button></div>`).join('')||'<p>Правил пока нет.</p>';
  $('trashList').innerHTML=data.trash.map(r=>`<div class="rule-row"><span>${esc(r.day)} · ${esc(r.payee||r.category)} · ${money(Math.ceil(r.amount/100))}</span><button data-restore="${esc(r.id)}" class="secondary">Восстановить</button></div>`).join('')||'<p>Корзина пуста.</p>';
 }
 function openExpense(record){
@@ -74,7 +74,7 @@ document.addEventListener('click',event=>{
  if(b.dataset.ruleDelete)busy(b,async()=>{await api('rule',{id:b.dataset.ruleDelete,delete:true});await load();});
  if(b.dataset.ruleFrom||b.dataset.ruleEdit){
   const r=b.dataset.ruleFrom?featureRecords.get(b.dataset.ruleFrom):data.rules.find(r=>String(r.id)===b.dataset.ruleEdit);
-  showPage('settings');const f=$('ruleForm');f.elements.id.value=b.dataset.ruleFrom?'':r.id;f.elements.pattern.value=r.pattern||r.payee;f.elements.mode.value=r.mode||'exact';$('ruleCategory').value=r.category;$('ruleSub').innerHTML=subOptions(r.category,r.subcategory);f.scrollIntoView({behavior:'smooth',block:'center'});
+  showPage('settings');const f=$('ruleForm');f.elements.id.value=b.dataset.ruleFrom?'':r.id;f.elements.pattern.value=r.pattern||r.payee;f.elements.mode.value=r.mode||'exact';f.elements.action.value=r.action||'';$('ruleCategory').value=r.category;$('ruleSub').innerHTML=subOptions(r.category,r.subcategory);f.scrollIntoView({behavior:'smooth',block:'center'});
  }
 });
 let attentionSequence=0;
@@ -118,7 +118,7 @@ for(const type of ['input','change','click','toggle'])document.addEventListener(
 function canAutoRefresh(){
  return data&&!document.hidden&&!$('workspace').hidden&&!activeActions&&
   ['overview','transactions','attention'].includes(currentPage)&&
-  !document.querySelector('dialog[open], .record-editor[open]')&&
+  !document.querySelector('dialog[open], .record-editor[open], .compact-operation[open]')&&
   !document.activeElement?.matches('input,select,textarea,[contenteditable="true"]');
 }
 async function autoRefresh(){
@@ -146,4 +146,4 @@ async function autoRefresh(){
 setInterval(autoRefresh,5*60*1000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)autoRefresh();});
 window.addEventListener('focus',autoRefresh);
-load().catch(e=>{if(e.message!=='Войдите в приложение')toast(e.message);});
+// Initial load runs after improvements.js has installed its controls.

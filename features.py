@@ -9,7 +9,9 @@ def fingerprint(rows):
     return hashlib.sha256(json.dumps(values, ensure_ascii=False).encode()).hexdigest()
 
 
-class Features:
+from improvements import Improvements
+
+class Features(Improvements):
     def feature_init(self, db):
         db.executescript('''
           CREATE TABLE IF NOT EXISTS subcategories(category TEXT,name TEXT,PRIMARY KEY(category,name));
@@ -18,11 +20,12 @@ class Features:
             category TEXT NOT NULL,subcategory TEXT NOT NULL DEFAULT '');
           CREATE TABLE IF NOT EXISTS reviews(kind TEXT,key TEXT,PRIMARY KEY(kind,key));
         ''')
+        self.improvements_init(db)
 
     def feature_settings(self):
         with self.db() as db:
             return {'subcategories':[dict(r) for r in db.execute('SELECT * FROM subcategories ORDER BY category,name')],
-                    'rules':[dict(r) for r in db.execute('SELECT * FROM rules ORDER BY id')],
+                    'rules':[dict(r) for r in db.execute('SELECT * FROM rules ORDER BY preferred DESC,id')],
                     'trash':[dict(r) for r in db.execute("SELECT id,day,amount,payee,note,category FROM records WHERE source='manual' AND deleted=1 ORDER BY day DESC")]}
 
     def validate_detail(self, db, category, subcategory=''):
@@ -39,12 +42,17 @@ class Features:
         category, name = str(values['category']), str(values['name']).strip()
         old = str(values.get('old',''))
         if not 1 <= len(name) <= 60: raise ValueError('Название: от 1 до 60 символов')
-        with self.db() as db:
+        with self.db(audit="Подкатегория") as db:
             self.validate_detail(db,category)
             db.execute('INSERT OR IGNORE INTO subcategories VALUES(?,?)',(category,name))
             if old and old != name:
                 db.execute('UPDATE record_details SET subcategory=? WHERE category=? AND subcategory=?',(name,category,old))
                 db.execute('UPDATE rules SET subcategory=? WHERE category=? AND subcategory=?',(name,category,old))
+                for row in db.execute('SELECT * FROM splits').fetchall():
+                    parts=json.loads(row['parts'])
+                    for part in parts:
+                        if part['category']==category and part['subcategory']==old: part['subcategory']=name
+                    db.execute('UPDATE splits SET parts=? WHERE id=?',(json.dumps(parts,ensure_ascii=False),row['id']))
                 db.execute('DELETE FROM subcategories WHERE category=? AND name=?',(category,old))
 
     @staticmethod
@@ -53,43 +61,66 @@ class Features:
         return bool(value) and (value == pattern if rule['mode']=='exact' else pattern in value)
 
     def rule(self, values):
-        with self.db() as db:
+        with self.db(audit='Правило получателя') as db:
             if values.get('delete'):
-                db.execute('DELETE FROM rules WHERE id=?',(int(values['id']),))
-                return
-            pattern, mode = str(values['pattern']).strip(), values.get('mode','exact')
-            category, sub = values['category'], str(values.get('subcategory',''))
-            if not 1 <= len(pattern) <= 300 or mode not in ('exact','contains'):
-                raise ValueError('Укажите получателя и способ сопоставления')
-            self.validate_detail(db,category,sub)
-            if values.get('id'):
-                db.execute('UPDATE rules SET pattern=?,mode=?,category=?,subcategory=? WHERE id=?',
-                           (pattern,mode,category,sub,int(values['id'])))
+                db.execute('DELETE FROM rules WHERE id=?',(int(values['id']),));return
+            self.save_rule(db,values)
+
+    def save_rule(self, db, values):
+        pattern,mode=str(values['pattern']).strip(),values.get('mode','exact')
+        category,sub=values['category'],str(values.get('subcategory',''))
+        action=values.get('action','')
+        if not 1<=len(pattern)<=300 or mode not in ('exact','contains') or action not in ('','review','expense','ignored'):
+            raise ValueError('Проверьте получателя и действие правила')
+        self.validate_detail(db,category,sub)
+        if values.get('id'):
+            db.execute('UPDATE rules SET pattern=?,mode=?,category=?,subcategory=?,action=? WHERE id=?',
+                       (pattern,mode,category,sub,action,int(values['id'])))
+        else:
+            existing=next((r for r in db.execute('SELECT id,pattern,mode FROM rules') if r['pattern'].casefold()==pattern.casefold() and r['mode']==mode),None)
+            if existing:
+                db.execute('UPDATE rules SET category=?,subcategory=?,action=? WHERE id=?',(category,sub,action,existing[0]))
             else:
-                db.execute('INSERT INTO rules(pattern,mode,category,subcategory) VALUES(?,?,?,?)',(pattern,mode,category,sub))
+                db.execute('INSERT INTO rules(pattern,mode,category,subcategory,action) VALUES(?,?,?,?,?)',(pattern,mode,category,sub,action))
+        if values.get('preferred'):
+            for row in db.execute('SELECT id,pattern,mode FROM rules').fetchall():
+                if row['pattern'].casefold()==pattern.casefold() and row['mode']==mode:
+                    db.execute('UPDATE rules SET preferred=1 WHERE id=?',(row['id'],))
 
     def enrich(self, rows):
         with self.db() as db:
-            rules = [dict(r) for r in db.execute('SELECT * FROM rules ORDER BY id')]
-            details = {r['id']:dict(r) for r in db.execute('SELECT * FROM record_details')}
+            rules=[dict(r) for r in db.execute('SELECT * FROM rules ORDER BY preferred DESC,id')]
+            details={r['id']:dict(r) for r in db.execute('SELECT * FROM record_details')}
+            splits={r['id']:dict(r) for r in db.execute('SELECT * FROM splits')}
         for r in rows:
-            r['rule_id'] = None
-            r['subcategory'] = ''
-            if r['source']=='zenmoney' and not r['custom_category'] and not r['own_transfer']:
+            r['rule_id']=None;r['subcategory']=''
+            r['category_reason']='Назначено вручную' if r['custom_category'] or r['source']=='manual' else 'Соответствие: '+(r['original_category'] or 'Без категории')+' → '+r['category']
+            r['decision_reason']='Ваше решение' if r['decision'] else 'Тип операции из источника'
+            if r['own_transfer']: r['decision_reason']='Перевод между собственными счетами'
+            if r['source']=='zenmoney' and not r['own_transfer']:
                 for rule in rules:
                     if self.rule_matches(rule,r):
-                        r['category'],r['subcategory'],r['rule_id'] = rule['category'],rule['subcategory'],rule['id']
+                        if not r['custom_category']:
+                            r['category'],r['subcategory'],r['rule_id']=rule['category'],rule['subcategory'],rule['id']
+                            r['category_reason']='Правило: '+rule['pattern']+' → '+rule['category']
+                        if rule['action'] and not r['decision'] and not r['pending'] and r['kind']!='income':
+                            r['status']=rule['action'];r['included']=r['primary'] and r['status']=='expense'
+                            r['decision_reason']='Правило получателя: '+rule['pattern']
+                            if r['status']=='review':r['review_reason']='Правило получателя требует вашего решения. До проверки в расходы не входит.'
                         break
-            detail = details.get(r['id'])
-            if detail and detail['category']==r['category']:
-                r['subcategory'] = detail['subcategory']
-            r['attention'] = ('pending' if r['pending'] else 'review' if r['status']=='review'
-                              else 'category' if r['included'] and r['category']=='Прочее' and not r['custom_category'] and not r['rule_id'] else '')
+            detail=details.get(r['id'])
+            if detail and detail['category']==r['category']:r['subcategory']=detail['subcategory']
+            split=splits.get(r['id']);r['parts']=json.loads(split['parts']) if split else []
+            r['split_stale']=bool(split and split['amount']!=r['amount'])
+            if r['split_stale'] and not r['own_transfer'] and r['status'] not in ('ignored','income'):
+                r['status']='review';r['included']=False;r['review_reason']='Сумма покупки изменилась. Исправьте или снимите разделение.'
+            r['attention']=('pending' if r['pending'] and r['status']!='ignored' else 'review' if r['status']=='review'
+                else 'category' if r['included'] and r['category']=='Прочее' and not r['custom_category'] and not r['rule_id'] and not r['parts'] else '')
         return rows
 
     def manual_update(self, values):
         from ledger import cents, valid_date
-        with self.db() as db:
+        with self.db(audit="Изменение ручного расхода") as db:
             row = db.execute("SELECT * FROM records WHERE id=? AND source='manual'",(values['id'],)).fetchone()
             if not row: raise ValueError('Ручная операция не найдена')
             if values.get('action') in ('delete','restore'):
@@ -109,7 +140,7 @@ class Features:
         if not isinstance(ids,list) or not 1 <= len(ids) <= 2: raise ValueError('Выберите операции')
         rows = [r for r in self.records() if r['id'] in ids]
         if len(rows)!=len(set(ids)): raise ValueError('Операции изменены или удалены')
-        with self.db() as db:
+        with self.db(audit='Отметка проверки') as db:
             if values.get('undo'):
                 db.execute('DELETE FROM reviews WHERE kind=? AND key=?',(kind,fingerprint(rows)))
             else:

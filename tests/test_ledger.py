@@ -40,6 +40,66 @@ class LedgerTests(unittest.TestCase):
                 'transaction':transactions}
     def tx(self, id='one', **extra):
         return dict({'id':id,'date':'2026-10-15','outcome':'1347.27','income':0,'outcomeAccount':'a','incomeAccount':'a','outcomeInstrument':2},**extra)
+    def test_split_preserves_rounding_sync_and_requires_review_on_amount_change(self):
+        l=self.ledger;l.apply_diff(self.diff([self.tx(outcome='100.01')]))
+        l.split({'id':'zm:one','parts':[{'amount':'50.01','category':'Продукты'},{'amount':'50','category':'Покупки'}]})
+        d=l.dashboard('2026-10');self.assertEqual(d['total'],101);self.assertEqual(d['totals'],{'Продукты':51,'Покупки':50})
+        self.assertEqual(l.reports('2026-10')['total'],101)
+        l.apply_diff(self.diff([self.tx(outcome='100.01')],2));self.assertEqual(len(l.records()[0]['parts']),2)
+        with self.assertRaises(ValueError):l.split({'id':'zm:one','parts':[{'amount':'50','category':'Продукты'},{'amount':'50','category':'Покупки'}]})
+        l.apply_diff(self.diff([self.tx(outcome='101')],3))
+        self.assertTrue(l.records()[0]['split_stale']);self.assertFalse(l.records()[0]['included'])
+        self.assertEqual(l.dashboard('2026-10')['review'],1)
+        l.split({'id':'zm:one','remove':True});self.assertTrue(l.records()[0]['included'])
+
+    def test_remember_rule_and_audit_undo_conflict(self):
+        l=self.ledger;l.apply_diff(self.diff([self.tx(payee='Тестовый магазин')]))
+        l.rule({'pattern':'магазин','mode':'contains','category':'Продукты'})
+        l.edit({'id':'zm:one','category':'Покупки','decision':'expense','remember':True,'future_action':'review'})
+        history=l.history();event=history[0]['id']
+        l.apply_diff(self.diff([self.tx('two',payee='Тестовый магазин')],2))
+        rows={r['id']:r for r in l.records()}
+        self.assertTrue(rows['zm:one']['included']);self.assertEqual(rows['zm:two']['status'],'review')
+        self.assertEqual(rows['zm:two']['category'],'Покупки')
+        l.undo({'id':event})
+        self.assertEqual(next(r for r in l.records() if r['id']=='zm:two')['category'],'Продукты')
+        l.edit({'id':'zm:one','category':'Покупки','decision':'ignored'});event=l.history()[0]['id']
+        l.apply_diff(self.diff([self.tx(payee='Тестовый магазин',outcome='200')],3))
+        with self.assertRaises(ValueError):l.undo({'id':event})
+        self.assertEqual(next(r for r in l.records() if r['id']=='zm:one')['amount'],20000)
+
+    def test_split_category_rename_and_undo(self):
+        l=self.ledger;sid=l.manual({'day':'2026-10-20','amount':'10','category':'Покупки'})['id']
+        l.split({'id':sid,'parts':[{'amount':'5','category':'Продукты'},{'amount':'5','category':'Покупки'}]})
+        l.rename_category('Покупки','Вещи');self.assertEqual(l.records()[0]['parts'][1]['category'],'Вещи')
+        l.undo({'id':l.history()[0]['id']});self.assertEqual(l.records()[0]['parts'][1]['category'],'Покупки')
+
+    def test_sync_counts_repeated_diff_and_equal_period_comparison(self):
+        l=self.ledger;tx=self.tx(date='2026-03-10',outcome='100')
+        l.apply_diff(self.diff([tx]));self.assertEqual(json.loads(l.setting('sync_stats'))['added'],1)
+        l.apply_diff(self.diff([tx],2));self.assertEqual(json.loads(l.setting('sync_stats'))['updated'],0)
+        l.apply_diff(self.diff([dict(tx,outcome='200')],3));self.assertEqual(json.loads(l.setting('sync_stats'))['updated'],1)
+        d=l.insights('2026-03');self.assertEqual(d['end'],'2026-03-28');self.assertEqual(d['previous_end'],'2026-02-28')
+
+    def test_undo_refuses_to_orphan_new_split(self):
+        l=self.ledger;sid=l.manual({'day':'2026-10-20','amount':'10','category':'Покупки'})['id']
+        creation=l.history()[0]['id']
+        l.split({'id':sid,'parts':[{'amount':'5','category':'Покупки'},{'amount':'5','category':'Продукты'}]})
+        with self.assertRaises(ValueError):l.undo({'id':creation})
+        self.assertEqual(len(l.records()),1)
+
+    def test_rule_actions_cannot_override_owned_transfer_or_pending(self):
+        l=self.ledger;l.rule({'pattern':'Получатель','category':'Покупки','action':'expense'})
+        l.apply_diff(self.diff([self.tx('own',payee='Получатель',income='1347.27',incomeAccount='b'),self.tx('hold',payee='Получатель',hold=True)]))
+        rows={r['source_id']:r for r in l.records()}
+        self.assertFalse(rows['own']['included']);self.assertFalse(rows['hold']['included'])
+        self.assertEqual(l.dashboard('2026-10')['pending_count'],1)
+
+    def test_import_undo_allows_reimport(self):
+        l=self.ledger;content=export([('14-10-2026','20','Продукты')])
+        l.import_csv(content);event=l.history()[0]['id'];l.undo({'id':event})
+        self.assertEqual(l.records(),[]);l.import_csv(content);self.assertEqual(len(l.records()),1)
+
     def test_money_ceil_per_operation(self):
         self.assertEqual(rubles(cents('1347,27')),1348)
         self.assertEqual(rubles(cents('248.80')),249)
@@ -308,7 +368,8 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(rows['saving']['status'],'ignored')
         self.assertTrue(rows['saving']['own_transfer'])
         self.assertEqual(rows['saving']['account_to'],'Мой счёт')
-        self.assertEqual(self.ledger.dashboard('2026-10')['review'],1)
+        self.assertEqual(self.ledger.dashboard('2026-10')['review'],0)
+        self.assertEqual(self.ledger.dashboard('2026-10')['pending_count'],1)
         with self.assertRaisesRegex(ValueError,'между своими'):
             self.ledger.edit({'id':'zm:saving','decision':'expense'})
         self.ledger.apply_diff(self.diff([self.tx('saving',outcome=250,income=250,incomeAccount='b',hold=False),self.tx('purchase',outcome=2250,hold=False)],2))
@@ -349,7 +410,7 @@ class WebTests(unittest.TestCase):
         return result
     def test_auth_and_csrf(self):
         self.assertTrue(self.request('/api/dashboard')['status'].startswith('401'))
-        for path in ('/api/features','/api/attention','/api/reports'):
+        for path in ('/api/features','/api/attention','/api/reports','/api/history','/api/insights'):
             self.assertTrue(self.request(path)['status'].startswith('401'))
         self.assertTrue(self.request('/api/login',{'password':'test-password-only'},csrf=False)['status'].startswith('403'))
         result=self.request('/api/login',{'password':'test-password-only'})

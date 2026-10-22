@@ -182,12 +182,16 @@ class Ledger(Features):
 
 
     @contextmanager
-    def db(self):
+    def db(self, audit=None):
         db = sqlite3.connect(self.path, timeout=30)
         db.row_factory = sqlite3.Row
         try:
             with db:
+                if audit:
+                    db.execute("BEGIN IMMEDIATE")
+                    before = self.snapshot(db)
                 yield db
+                if audit: self.audit_changes(db,before,audit)
         finally:
             db.close()
 
@@ -197,7 +201,7 @@ class Ledger(Features):
             return row[0] if row else default
 
     def set_setting(self, key, value):
-        with self.db() as db:
+        with self.db(audit='Дата перехода' if key=='cutover' else None) as db:
             db.execute('INSERT OR REPLACE INTO settings VALUES(?,?)', (key,value))
 
     def import_csv(self, content):
@@ -228,7 +232,7 @@ class Ledger(Features):
             parsed.append((f'{signature}:{occurrences[signature]}',day,amount,row,raw))
         if not parsed: raise ValueError('Файл пуст')
         inserted = 0
-        with self.db() as db:
+        with self.db(audit='Импорт EasyFinance') as db:
             for sid, day, amount, row, raw in parsed:
                 original = row['категория'].strip() or 'Без категории'
                 if original == 'Разное':
@@ -252,7 +256,7 @@ class Ledger(Features):
         if not amount: raise ValueError('Укажите сумму больше нуля')
         day = valid_date(values['day'])
         category = str(values['category'])
-        with self.db() as db:
+        with self.db(audit="Добавление ручного расхода") as db:
             if not db.execute('SELECT 1 FROM categories WHERE name=?',(category,)).fetchone():
                 raise ValueError('Неизвестная категория')
             sid = str(uuid.uuid4())
@@ -263,7 +267,7 @@ class Ledger(Features):
         return {'id':sid}
 
     def edit(self, values):
-        with self.db() as db:
+        with self.db(audit="Изменение операции") as db:
             record = db.execute('SELECT * FROM records WHERE id=?',(values['id'],)).fetchone()
             if not record:
                 raise ValueError('Операция не найдена')
@@ -282,11 +286,14 @@ class Ledger(Features):
             if values.get('reset_category'):
                 db.execute('UPDATE records SET custom_category=NULL WHERE id=?',(values['id'],))
                 db.execute('DELETE FROM record_details WHERE id=?',(values['id'],))
+            if values.get('remember'):
+                if record['source']!='zenmoney' or not record['payee'].strip(): raise ValueError('Правило доступно для получателя из Дзен-мани')
+                self.save_rule(db,dict(pattern=record['payee'],mode='exact',category=category or record['category'],subcategory=str(values.get('subcategory','')),action=values.get('future_action',''),preferred=True))
             if 'subcategory' in values:
                 self.set_detail(db,values['id'],category or record['category'],str(values['subcategory']))
 
     def map_category(self, original, category):
-        with self.db() as db:
+        with self.db(audit="Соответствие категории") as db:
             if not db.execute('SELECT 1 FROM categories WHERE name=?',(category,)).fetchone():
                 raise ValueError('Неизвестная категория')
             db.execute('INSERT OR REPLACE INTO mapping VALUES(?,?)',(original,category))
@@ -299,12 +306,12 @@ class Ledger(Features):
     def add_category(self, name):
         name = str(name).strip()
         if not 1 <= len(name) <= 60: raise ValueError('Название: от 1 до 60 символов')
-        with self.db() as db: db.execute('INSERT OR IGNORE INTO categories VALUES(?)',(name,))
+        with self.db(audit="Новая категория") as db: db.execute('INSERT OR IGNORE INTO categories VALUES(?)',(name,))
 
     def rename_category(self, old, new):
         new = str(new).strip()
         if not 1 <= len(new) <= 60: raise ValueError('Название: от 1 до 60 символов')
-        with self.db() as db:
+        with self.db(audit="Переименование категории") as db:
             if not db.execute('SELECT 1 FROM categories WHERE name=?',(old,)).fetchone():
                 raise ValueError('Категория не найдена')
             db.execute('INSERT OR IGNORE INTO categories VALUES(?)',(new,))
@@ -318,6 +325,11 @@ class Ledger(Features):
                 db.execute('DELETE FROM subcategories WHERE category=?',(old,))
                 db.execute('UPDATE record_details SET category=? WHERE category=?',(new,old))
                 db.execute('UPDATE rules SET category=? WHERE category=?',(new,old))
+            for row in db.execute('SELECT * FROM splits').fetchall():
+                parts=json.loads(row['parts'])
+                for part in parts:
+                    if part['category']==old: part['category']=new
+                db.execute('UPDATE splits SET parts=? WHERE id=?',(json.dumps(parts,ensure_ascii=False),row['id']))
             if old != new: db.execute('DELETE FROM categories WHERE name=?',(old,))
 
     def apply_diff(self, diff):
@@ -329,6 +341,7 @@ class Ledger(Features):
                 for item in diff.get(kind,[]):
                     db.execute('INSERT OR REPLACE INTO entities VALUES(?,?,?)',(kind,str(item['id']),json.dumps(item,ensure_ascii=False)))
             entities = {(r['kind'],r['id']):json.loads(r['data']) for r in db.execute('SELECT * FROM entities')}
+            sync_before={r['source_id']:dict(r) for r in db.execute("SELECT * FROM records WHERE source='zenmoney'")}
             for item in diff.get('transaction',[]):
                 sid = str(item['id'])
                 if item.get('deleted'):
@@ -358,6 +371,15 @@ class Ledger(Features):
                     db.execute("UPDATE records SET deleted=1 WHERE source='zenmoney' AND source_id=?",(str(item['id']),))
                 else:
                     db.execute('DELETE FROM entities WHERE kind=? AND id=?',(item['object'],str(item['id'])))
+            sync_after={r['source_id']:dict(r) for r in db.execute("SELECT * FROM records WHERE source='zenmoney'")}
+            added=sum(k not in sync_before and not v['deleted'] for k,v in sync_after.items())
+            updated=sum(k in sync_before and not v['deleted'] and v!=sync_before[k] for k,v in sync_after.items())
+            deleted=sum(k in sync_before and v['deleted'] and not sync_before[k]['deleted'] for k,v in sync_after.items())
+            stats={'added':added,'updated':updated,'deleted':deleted}
+            db.execute('INSERT OR REPLACE INTO settings VALUES(?,?)',('sync_stats',json.dumps(stats)))
+            if added or updated or deleted:
+                db.execute('INSERT INTO audit(created,label,changes,undoable) VALUES(?,?,?,0)',
+                    (datetime.now(timezone.utc).isoformat(),f'Дзен-мани: добавлено {added}, изменено {updated}, удалено {deleted}',json.dumps([{'table':'records','key':[k],'before':sync_before.get(k),'after':v} for k,v in sync_after.items() if sync_before.get(k)!=v],ensure_ascii=False)))
             for key,value in [('zen_cursor',str(diff['serverTimestamp'])),('last_sync',datetime.now(timezone.utc).isoformat()),('sync_error','')]:
                 db.execute('INSERT OR REPLACE INTO settings VALUES(?,?)',(key,value))
         return {'received':len(diff.get('transaction',[]))}
@@ -398,7 +420,7 @@ class Ledger(Features):
         rows = self.records(month)
         included = [r for r in rows if r['included']]
         totals = Counter()
-        for r in included: totals[r['category']] += r['rubles']
+        for r in self.expense_parts(included): totals[r['category']] += r['rubles']
         with self.db() as db:
             mapping = [dict(r) for r in db.execute('SELECT * FROM mapping ORDER BY original')]
             for entry in mapping:
@@ -408,9 +430,11 @@ class Ledger(Features):
         year_start = today[:4]+'-01-01'
         year_total = sum(r['rubles'] for r in self.records()
                          if r['included'] and year_start <= r['day'] <= today)
-        return {'year_total':year_total,'year_start':year_start,'year_end':today,
+        attention=self.attention(month)
+        return {'insights':self.insights(month or today[:7]),'sync_stats':json.loads(self.setting('sync_stats','{}')),'year_total':year_total,'year_start':year_start,'year_end':today,
                 'rows':rows,'total':sum(r['rubles'] for r in included),'count':len(included),
-                'review':sum(r['primary'] and r['status']=='review' for r in rows),
+                'review':len({r['id'] for key in ('review','category') for r in attention[key]} | {r['id'] for pair in attention['duplicates'] for r in pair.values()}),
+                'pending_count':len(attention['pending']),
                 'totals':dict(totals.most_common()),'categories':self.categories(),'mapping':mapping,'months':months,
                 'cutover':self.setting('cutover'),'last_sync':self.setting('last_sync'),'sync_error':self.setting('sync_error'),
                 **self.feature_settings()}
@@ -429,7 +453,7 @@ class Ledger(Features):
             first,last=date(anchor.year,m,1),date(anchor.year,m+2,calendar.monthrange(anchor.year,m+2)[1])
         else: first,last=anchor,date(anchor.year,anchor.month,calendar.monthrange(anchor.year,anchor.month)[1])
         if last<first or (last-first).days>3660: raise ValueError('Диапазон: от одного дня до десяти лет')
-        all_rows=[r for r in self.records() if r['included']]
+        all_rows=self.expense_parts([r for r in self.records() if r['included']])
         rows=[r for r in all_rows if first.isoformat()<=r['day']<=last.isoformat()]
         daily=period=='month' or (period=='range' and (last-first).days<62)
         if daily: keys=[(first+timedelta(days=i)).isoformat() for i in range((last-first).days+1)]
@@ -445,7 +469,7 @@ class Ledger(Features):
         return {'rows':rows,'comparison':comparison,'compare_start':compare_start,'compare_end':compare_end,
                 'start':first.isoformat(),'end':last.isoformat(),'daily':daily,
                 'buckets':keys,'period':period,'month':month,
-                'total':sum(r['rubles'] for r in rows),'count':len(rows)}
+                'total':sum(r['rubles'] for r in rows),'count':len({r['id'] for r in rows})}
 
     def reconcile(self, month):
         rows = self.records(month)
