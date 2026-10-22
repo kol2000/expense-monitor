@@ -4,7 +4,7 @@ const money = n => new Intl.NumberFormat('ru-RU',{maximumFractionDigits:0}).form
 const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const localDate = () => new Date().toLocaleDateString('sv-SE');
 const featureRecords=new Map();
-let data, currentPage='overview', toastTimer, loadSequence=0;
+let data, currentPage='overview', toastTimer, loadSequence=0, activeActions=0;
 $('month').value=localDate().slice(0,7);
 function toast(message){$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,6500);}
 async function api(path,body){
@@ -13,7 +13,7 @@ async function api(path,body){
   if(!response.ok){if(response.status===401){$('workspace').hidden=true;$('login').hidden=false;}throw new Error(result.error||'Ошибка запроса');}
   return result;
 }
-async function busy(button,fn){button.disabled=true;try{await fn();}catch(e){toast(e.message);}finally{button.disabled=false;}}
+async function busy(button,fn){button.disabled=true;activeActions++;try{await fn();}catch(e){toast(e.message);}finally{button.disabled=false;activeActions--;}}
 function options(selected){return data.categories.map(c=>`<option${c===selected?' selected':''}>${esc(c)}</option>`).join('');}
 function sourceLabel(source){return {easyfinance:'EasyFinance',zenmoney:'Дзен-мани',manual:'Вручную'}[source]||source;}
 function rowHTML(r,editable=false){
@@ -42,10 +42,7 @@ function renderRows(){
  $('rows').innerHTML=rows.length?rows.map(r=>rowHTML(r,true)).join(''):'<p class="empty">За этот период подходящих операций нет.</p>';
 }
 function render(){
- $('total').textContent=money(data.total);$('count').textContent=`${data.count} операций в отчёте`;$('reviewCount').textContent=data.review;
- $('syncStatus').textContent=data.sync_error|| (data.last_sync?`Дзен-мани обновлён: ${new Date(data.last_sync).toLocaleString('ru-RU')}`:data.zen_configured?'Дзен-мани подключён. Ожидается первая синхронизация.':'Дзен-мани пока не подключён. Можно импортировать историю и добавлять расходы.');
- $('chart').innerHTML=Object.entries(data.totals).map(([c,n])=>`<div class="bar-row"><div class="bar-label"><span>${esc(c)}</span><strong>${money(n)}</strong></div><progress max="${data.total||1}" value="${n}"></progress></div>`).join('')||'<p class="empty">Здесь появится распределение расходов.</p>';
- $('recent').innerHTML=data.rows.filter(r=>r.included).slice(0,6).map(r=>rowHTML(r)).join('')||'<p class="empty">Добавьте первый расход или загрузите историю.</p>';
+ renderOverview();
  $('manualCategory').innerHTML=options();$('cutover').value=data.cutover;
  $('mapping').innerHTML=data.mapping.map(m=>`<div class="mapping-row"><span>${esc(m.original||'Без категории')}</span><select data-map="${esc(m.original)}" aria-label="Соответствие категории ${esc(m.original)}">${options(m.category)}</select>${m.suggested&&m.suggested!=='Прочее'&&m.suggested!==m.category?`<button class="secondary" data-suggest="${esc(m.original)}" data-value="${esc(m.suggested)}">Применить: ${esc(m.suggested)}</button>`:''}</div>`).join('')||'<p class="empty">Соответствия появятся после импорта.</p>';
  $('categoryList').innerHTML=data.categories.map(c=>`<div class="category-row"><input data-rename-input="${esc(c)}" aria-label="Название категории ${esc(c)}" value="${esc(c)}" maxlength="60"><button data-rename="${esc(c)}" class="secondary">Сохранить</button></div>`).join('');
@@ -53,6 +50,12 @@ function render(){
  renderFeatures();
  if(currentPage==='attention')loadAttention().catch(e=>toast(e.message));
  if(currentPage==='reports')loadReports().catch(e=>toast(e.message));
+}
+function renderOverview(){
+ $('total').textContent=money(data.total);$('count').textContent=`${data.count} операций в отчёте`;$('reviewCount').textContent=data.review;
+ $('syncStatus').textContent=data.sync_error|| (data.last_sync?`Дзен-мани обновлён: ${new Date(data.last_sync).toLocaleString('ru-RU')}`:data.zen_configured?'Дзен-мани подключён. Ожидается первая синхронизация.':'Дзен-мани пока не подключён. Можно импортировать историю и добавлять расходы.');
+ $('chart').innerHTML=Object.entries(data.totals).map(([c,n])=>`<div class="bar-row"><div class="bar-label"><span>${esc(c)}</span><strong>${money(n)}</strong></div><progress max="${data.total||1}" value="${n}"></progress></div>`).join('')||'<p class="empty">Здесь появится распределение расходов.</p>';
+ $('recent').innerHTML=data.rows.filter(r=>r.included).slice(0,6).map(r=>rowHTML(r)).join('')||'<p class="empty">Добавьте первый расход или загрузите историю.</p>';
 }
 async function load(){const sequence=++loadSequence;const result=await api('dashboard?month='+encodeURIComponent($('month').value));if(sequence!==loadSequence)return;data=result;$('login').hidden=true;$('workspace').hidden=false;render();}
 document.addEventListener('click',async event=>{

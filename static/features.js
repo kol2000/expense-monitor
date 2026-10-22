@@ -82,6 +82,9 @@ async function loadAttention(){
  const sequence=++attentionSequence;$('attentionContent').innerHTML='<p>Загрузка…</p>';
  const r=await api('attention?month='+encodeURIComponent($('month').value));
  if(sequence!==attentionSequence||currentPage!=='attention')return;
+ renderAttention(r);
+}
+function renderAttention(r){
  const section=(title,rows,hint)=>`<article class="panel"><h2>${title} (${rows.length})</h2><p>${hint}</p>${rows.map(x=>rowHTML(x,true)).join('')||'<p class="muted">Нет операций</p>'}</article>`;
  $('attentionContent').innerHTML=section('Банк обрабатывает покупку',r.pending,'Ждём окончательного списания. Повторно добавлять расход не нужно.')+section('Проверить назначение',r.review,'Уточните, является ли операция расходом или переводом.')+section('Уточнить категорию',r.category,'Расходы в «Прочем» без индивидуального назначения или правила.')+`<article class="panel"><h2>Возможные дубли (${r.duplicates.length})</h2><p>Одинаковая сумма после округления, даты отличаются не больше чем на три дня. Совпадение не доказывает дублирование.</p>${r.duplicates.map(p=>`<div class="review-pair"><div class="pair-columns">${rowHTML(p.manual,true)}${rowHTML(p.bank,true)}</div><button data-duplicate-dismiss="${esc(p.manual.id)}" data-other="${esc(p.bank.id)}" class="secondary">Это разные расходы</button><button data-duplicate-exclude="${esc(p.manual.id)}" class="secondary">Исключить ручную запись</button></div>`).join('')||'<p>Совпадений нет</p>'}</article>`;
 }
@@ -109,4 +112,38 @@ $('reportApply').onclick=()=>busy($('reportApply'),loadReports);
 $('reportCategoryFilter').onchange=()=>{reportCategory=$('reportCategoryFilter').value||null;reportDetail=null;if(reportData)renderReport();};
 // Keep financial data out of an offline cache. The manifest supplies home-screen launch metadata.
 
+// Refresh only read views. Never rebuild settings or an open editor in the background.
+let refreshRunning=false, interactionRevision=0, lastRefreshAttempt=0;
+for(const type of ['input','change','click','toggle'])document.addEventListener(type,()=>interactionRevision++,true);
+function canAutoRefresh(){
+ return data&&!document.hidden&&!$('workspace').hidden&&!activeActions&&
+  ['overview','transactions','attention'].includes(currentPage)&&
+  !document.querySelector('dialog[open], .record-editor[open]')&&
+  !document.activeElement?.matches('input,select,textarea,[contenteditable="true"]');
+}
+async function autoRefresh(){
+ if(refreshRunning||!canAutoRefresh()||Date.now()-lastRefreshAttempt<1000)return;
+ refreshRunning=true;lastRefreshAttempt=Date.now();
+ const page=currentPage,month=$('month').value,revision=interactionRevision,sequence=loadSequence,attentionVersion=attentionSequence;
+ try{
+  const [next,attention]=await Promise.all([
+   api('dashboard?month='+encodeURIComponent(month)),
+   page==='attention'?api('attention?month='+encodeURIComponent(month)):Promise.resolve(null)
+  ]);
+  // The user may have started editing or navigated while requests were in flight.
+  if(!canAutoRefresh()||revision!==interactionRevision||sequence!==loadSequence||
+     attentionVersion!==attentionSequence||page!==currentPage||month!==$('month').value)return;
+  const x=window.scrollX,y=window.scrollY;
+  const changed=JSON.stringify(data)!==JSON.stringify(next);
+  data=next;
+  if(changed){renderOverview();if(page==='transactions')renderRows();}
+  if(attention)renderAttention(attention);
+  window.scrollTo(x,y);
+ }catch(error){
+  // Keep the last successful view on transient network failures; retry next tick.
+ }finally{refreshRunning=false;}
+}
+setInterval(autoRefresh,5*60*1000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)autoRefresh();});
+window.addEventListener('focus',autoRefresh);
 load().catch(e=>{if(e.message!=='Войдите в приложение')toast(e.message);});
