@@ -54,6 +54,29 @@ def available_category(db, suggested):
         return suggested
     return db.execute("SELECT name FROM categories ORDER BY (name='Прочее') DESC,rowid LIMIT 1").fetchone()[0]
 
+def resolve_category(db, original):
+    names = {r[0].strip().casefold(): r[0] for r in db.execute('SELECT name FROM categories')}
+    key = original.strip().casefold()
+    if key in names:
+        return names[key]
+    renamed = db.execute('SELECT category FROM category_aliases WHERE original=?',(key,)).fetchone()
+    if renamed and renamed[0].casefold() in names:
+        return names[renamed[0].casefold()]
+    groups = [('Дом и быт','Домашнее хозяйство','Дом, уют'),
+              ('Здоровье','Медицина','Здоровье и Фитнес'),
+              ('Машина','Автомобиль'),
+              ('Семья и подарки','Семья, подарки, материальная помощь','Подарки'),
+              ('Кафе и доставка','Кафе и рестораны'),
+              ('Парикмахерская и уход за собой','Забота о себе')]
+    suggested = suggested_category(original)
+    for group in groups:
+        if key in [v.casefold() for v in group] or suggested in group:
+            for value in group:
+                if value.casefold() in names:
+                    return names[value.casefold()]
+    renamed = db.execute('SELECT category FROM category_aliases WHERE original=?',(suggested.casefold(),)).fetchone()
+    return available_category(db, renamed[0] if renamed else suggested)
+
 def zen_category_key(original, payee):
     # Generic service labels cannot classify every merchant as a phone bill.
     if original.casefold().strip() in ('', 'услуги', 'прочее') and payee.casefold().strip() in ('мтс', 'mts'):
@@ -107,6 +130,7 @@ class Ledger(Features):
               CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
               CREATE TABLE IF NOT EXISTS categories(name TEXT PRIMARY KEY);
               CREATE TABLE IF NOT EXISTS mapping(original TEXT PRIMARY KEY,category TEXT NOT NULL);
+              CREATE TABLE IF NOT EXISTS category_aliases(original TEXT PRIMARY KEY,category TEXT NOT NULL);
               CREATE TABLE IF NOT EXISTS records(
                 id TEXT PRIMARY KEY, source TEXT NOT NULL, source_id TEXT NOT NULL,
                 day TEXT NOT NULL, amount INTEGER NOT NULL, category TEXT NOT NULL,
@@ -284,6 +308,8 @@ class Ledger(Features):
             if not db.execute('SELECT 1 FROM categories WHERE name=?',(old,)).fetchone():
                 raise ValueError('Категория не найдена')
             db.execute('INSERT OR IGNORE INTO categories VALUES(?)',(new,))
+            db.execute('UPDATE category_aliases SET category=? WHERE category=?',(new,old))
+            db.execute('INSERT OR REPLACE INTO category_aliases VALUES(?,?)',(old.strip().casefold(),new))
             db.execute('UPDATE records SET category=? WHERE category=?',(new,old))
             db.execute('UPDATE records SET custom_category=? WHERE custom_category=?',(new,old))
             db.execute('UPDATE mapping SET category=? WHERE category=?',(new,old))
@@ -319,7 +345,7 @@ class Ledger(Features):
                 if item['_blocked']:
                     db.execute("UPDATE records SET decision=NULL WHERE source='zenmoney' AND source_id=? AND decision='expense'",(sid,))
                 mapped = db.execute('SELECT category FROM mapping WHERE original=?',(original,)).fetchone()
-                category = mapped[0] if mapped else available_category(db,suggested_category(original))
+                category = mapped[0] if mapped else resolve_category(db,original)
                 db.execute('INSERT OR IGNORE INTO mapping VALUES(?,?)',(original,category))
                 db.execute('''INSERT INTO records(id,source,source_id,day,amount,category,original_category,account,payee,note,kind,deleted,raw)
                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source,source_id) DO UPDATE SET
@@ -376,9 +402,14 @@ class Ledger(Features):
         with self.db() as db:
             mapping = [dict(r) for r in db.execute('SELECT * FROM mapping ORDER BY original')]
             for entry in mapping:
-                entry['suggested'] = available_category(db, suggested_category(entry['original']))
+                entry['suggested'] = resolve_category(db, entry['original'])
             months = [r[0] for r in db.execute('SELECT DISTINCT substr(day,1,7) FROM records WHERE deleted=0 ORDER BY 1 DESC')]
-        return {'rows':rows,'total':sum(r['rubles'] for r in included),'count':len(included),
+        today = datetime.now(timezone(timedelta(hours=3))).date().isoformat()
+        year_start = today[:4]+'-01-01'
+        year_total = sum(r['rubles'] for r in self.records()
+                         if r['included'] and year_start <= r['day'] <= today)
+        return {'year_total':year_total,'year_start':year_start,'year_end':today,
+                'rows':rows,'total':sum(r['rubles'] for r in included),'count':len(included),
                 'review':sum(r['primary'] and r['status']=='review' for r in rows),
                 'totals':dict(totals.most_common()),'categories':self.categories(),'mapping':mapping,'months':months,
                 'cutover':self.setting('cutover'),'last_sync':self.setting('last_sync'),'sync_error':self.setting('sync_error'),

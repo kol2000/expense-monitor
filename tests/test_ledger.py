@@ -6,7 +6,8 @@ import tempfile
 import unittest
 import uuid
 from pathlib import Path
-from ledger import Ledger, cents, rubles
+from ledger import Ledger, cents, rubles, resolve_category
+from datetime import datetime, timezone, timedelta
 
 class TestDirectory:
     """Inherit Windows workspace ACLs (TemporaryDirectory's mode 0700 can block sandbox access)."""
@@ -43,6 +44,34 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(rubles(cents('1347,27')),1348)
         self.assertEqual(rubles(cents('248.80')),249)
         self.assertEqual(rubles(cents('100')),100)
+
+    def test_category_resolution_exact_alias_and_explicit_mapping(self):
+        l=self.ledger
+        l.rename_category('Дом и быт','Домашнее хозяйство')
+        l.rename_category('Здоровье','Медицина')
+        l.add_category('Машина')
+        with l.db() as db:
+            self.assertEqual(resolve_category(db,' машина '),'Машина')
+            self.assertEqual(resolve_category(db,'Дом, уют'),'Домашнее хозяйство')
+            self.assertEqual(resolve_category(db,'Медицинские услуги'),'Медицина')
+        l.rename_category('Машина','Мой автомобиль')
+        with l.db() as db:
+            self.assertEqual(resolve_category(db,'Машина'),'Мой автомобиль')
+        diff=self.diff([self.tx(tag=['car'])]);diff['tag']=[{'id':'car','title':'Машина'}]
+        l.apply_diff(diff)
+        self.assertEqual(l.records()[0]['category'],'Мой автомобиль')
+        l.map_category('Машина','Покупки')
+        l.apply_diff(diff)
+        self.assertEqual(l.records()[0]['category'],'Покупки')
+
+    def test_year_total_is_current_year_independent_of_selected_month(self):
+        l=self.ledger
+        today=datetime.now(timezone(timedelta(hours=3))).date()
+        l.set_setting('cutover',f'{today.year}-01-01')
+        l.manual({'day':f'{today.year}-01-01','amount':'100.01','category':'Покупки'})
+        l.manual({'day':f'{today.year-1}-12-31','amount':'200','category':'Покупки'})
+        l.manual({'day':f'{today.year+1}-01-01','amount':'300','category':'Покупки'})
+        self.assertEqual(l.dashboard('2020-01')['year_total'],101)
 
     def test_person_transfers_review_saved_imports_and_keep_decisions(self):
         l = self.ledger

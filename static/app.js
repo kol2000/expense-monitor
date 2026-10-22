@@ -52,10 +52,11 @@ function render(){
  if(currentPage==='reports')loadReports().catch(e=>toast(e.message));
 }
 function renderOverview(){
+ $('yearTotal').textContent=money(data.year_total);$('yearRange').textContent=`${data.year_start.split('-').reverse().join('.')} — ${data.year_end.split('-').reverse().join('.')}`;
  $('total').textContent=money(data.total);$('count').textContent=`${data.count} операций в отчёте`;$('reviewCount').textContent=data.review;
  $('syncStatus').textContent=data.sync_error|| (data.last_sync?`Дзен-мани обновлён: ${new Date(data.last_sync).toLocaleString('ru-RU')}`:data.zen_configured?'Дзен-мани подключён. Ожидается первая синхронизация.':'Дзен-мани пока не подключён. Можно импортировать историю и добавлять расходы.');
  $('chart').innerHTML=Object.entries(data.totals).map(([c,n])=>`<div class="bar-row"><div class="bar-label"><span>${esc(c)}</span><strong>${money(n)}</strong></div><progress max="${data.total||1}" value="${n}"></progress></div>`).join('')||'<p class="empty">Здесь появится распределение расходов.</p>';
- $('recent').innerHTML=data.rows.filter(r=>r.included).slice(0,6).map(r=>rowHTML(r)).join('')||'<p class="empty">Добавьте первый расход или загрузите историю.</p>';
+ $('recent').innerHTML=data.rows.filter(r=>r.included).slice(0,6).map(r=>rowHTML(r,true)).join('')||'<p class="empty">Добавьте первый расход или загрузите историю.</p>';
 }
 async function load(){const sequence=++loadSequence;const result=await api('dashboard?month='+encodeURIComponent($('month').value));if(sequence!==loadSequence)return;data=result;$('login').hidden=true;$('workspace').hidden=false;render();}
 document.addEventListener('click',async event=>{
