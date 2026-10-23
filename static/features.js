@@ -117,7 +117,7 @@ let refreshRunning=false, interactionRevision=0, lastRefreshAttempt=0;
 for(const type of ['input','change','click','toggle'])document.addEventListener(type,()=>interactionRevision++,true);
 function canAutoRefresh(){
  return data&&!document.hidden&&!$('workspace').hidden&&!activeActions&&
-  ['overview','transactions','attention'].includes(currentPage)&&
+  ['overview','transactions','attention','accounts'].includes(currentPage)&&
   !document.querySelector('dialog[open], .record-editor[open], .compact-operation[open]')&&
   !document.activeElement?.matches('input,select,textarea,[contenteditable="true"]');
 }
@@ -136,7 +136,7 @@ async function autoRefresh(){
   const x=window.scrollX,y=window.scrollY;
   const changed=JSON.stringify(data)!==JSON.stringify(next);
   data=next;
-  if(changed){renderOverview();if(page==='transactions')renderRows();}
+  if(changed){renderOverview();if(page==='accounts')renderAccounts();if(page==='transactions')renderRows();}
   if(attention)renderAttention(attention);
   window.scrollTo(x,y);
  }catch(error){

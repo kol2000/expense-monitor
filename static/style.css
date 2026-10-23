@@ -82,3 +82,5 @@ html[data-skin]:not([data-skin="forest"]) .badge.review,html[data-skin]:not([dat
 .operation-filters select{width:100%;min-width:0}.sync-warning,.sync-summary{margin-bottom:18px}
 
 .compact-operation>summary>span:first-child::before{content:"› ";font-weight:700}.compact-operation[open]>summary>span:first-child::before{content:"⌄ "}
+
+.account-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:16px}.account-card{border:1px solid var(--line,#496052);border-radius:16px;padding:20px;display:flex;flex-direction:column;gap:12px}.account-card h3,.account-card p{margin:0}.account-balance{font-size:26px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.account-total{margin-top:20px}.account-archive{margin-top:24px}.account-archive summary{cursor:pointer;padding:12px 0}.month-navigation[hidden]{display:none}

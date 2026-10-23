@@ -30,6 +30,30 @@ def export(rows):
     return out.getvalue().encode('cp1251')
 
 class LedgerTests(unittest.TestCase):
+    def test_account_balances_are_signed_current_and_independent(self):
+        accounts = [
+            {'id':'a','title':'Card','balance':100.25,'inBalance':True},
+            {'id':'b','title':'Credit','balance':-30.10,'creditLimit':10000,'inBalance':True},
+            {'id':'c','title':'Archive','balance':500,'inBalance':True,'archive':True},
+            {'id':'d','title':'Excluded','balance':600,'inBalance':False},
+            {'id':'e','title':'Unknown','balance':None,'inBalance':True},
+            {'id':'f','title':'Debt','type':'debt','balance':900,'inBalance':True},
+            {'id':'g','title':'Zero','balance':0,'inBalance':True},
+        ]
+        with self.ledger.db() as db:
+            for a in accounts:
+                db.execute("INSERT INTO entities(kind,id,data) VALUES('account',?,?)",(a['id'],json.dumps(a)))
+        result=self.ledger.accounts()
+        self.assertEqual(result['total'],7015)
+        self.assertEqual(result['missing'],1)
+        self.assertEqual(result['included_count'],4)
+        self.assertEqual(len(result['rows']),7)
+        self.assertEqual(self.ledger.dashboard('2021-01')['accounts'],result)
+        with self.ledger.db() as db:
+            accounts[0]['balance']=200.25
+            db.execute("UPDATE entities SET data=? WHERE kind='account' AND id='a'",(json.dumps(accounts[0]),))
+        self.assertEqual(self.ledger.accounts()['total'],17015)
+
     def setUp(self):
         self.tmp=TestDirectory()
         self.ledger=Ledger(Path(self.tmp.name)/'db.sqlite3')

@@ -416,6 +416,30 @@ class Ledger(Features):
             r['included'] = r['primary'] and r['status']=='expense'
         return self.enrich(rows)
 
+    def accounts(self):
+        """Current upstream balances, independent of expense filters and cutover."""
+        with self.db() as db:
+            entities = [json.loads(r[0]) for r in db.execute("SELECT data FROM entities WHERE kind='account'")]
+        rows = []
+        for account in entities:
+            balance = None
+            try:
+                value = Decimal(str(account.get('balance')))
+                if value.is_finite():
+                    balance = int((value * 100).quantize(Decimal('1')))
+            except (InvalidOperation, ValueError, TypeError):
+                pass
+            archived = bool(account.get('archive'))
+            included = bool(account.get('inBalance')) and not archived and account.get('type') != 'debt'
+            rows.append({'id':account['id'], 'title':account.get('title') or 'Без названия',
+                         'type':account.get('type') or '', 'balance':balance,
+                         'archived':archived, 'included':included,
+                         'savings':bool(account.get('savings'))})
+        rows.sort(key=lambda r:(r['archived'], not r['included'], r['title'].casefold()))
+        return {'rows':rows, 'total':sum(r['balance'] for r in rows if r['included'] and r['balance'] is not None),
+                'missing':sum(r['included'] and r['balance'] is None for r in rows),
+                'included_count':sum(r['included'] for r in rows)}
+
     def dashboard(self, month):
         rows = self.records(month)
         included = [r for r in rows if r['included']]
@@ -431,7 +455,7 @@ class Ledger(Features):
         year_total = sum(r['rubles'] for r in self.records()
                          if r['included'] and year_start <= r['day'] <= today)
         attention=self.attention(month)
-        return {'insights':self.insights(month or today[:7]),'sync_stats':json.loads(self.setting('sync_stats','{}')),'year_total':year_total,'year_start':year_start,'year_end':today,
+        return {'accounts':self.accounts(),'insights':self.insights(month or today[:7]),'sync_stats':json.loads(self.setting('sync_stats','{}')),'year_total':year_total,'year_start':year_start,'year_end':today,
                 'rows':rows,'total':sum(r['rubles'] for r in included),'count':len(included),
                 'review':len({r['id'] for key in ('review','category') for r in attention[key]} | {r['id'] for pair in attention['duplicates'] for r in pair.values()}),
                 'pending_count':len(attention['pending']),

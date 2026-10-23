@@ -64,3 +64,13 @@ document.addEventListener('click',event=>{
  if(b.dataset.undoEvent)busy(b,async()=>{await api('undo',{id:Number(b.dataset.undoEvent)});await load();await loadHistory();toast('Изменение отменено');});
 });
 load().catch(e=>{if(e.message!=='Войдите в приложение')toast(e.message);});
+
+function renderAccounts(){
+ const summary=data.accounts||{rows:[],total:0,missing:0,included_count:0};
+ const exact=n=>n===null?'Нет данных':new Intl.NumberFormat('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2}).format(n/100)+' ₽';
+ const types={cash:'Наличные',ccard:'Карта',checking:'Банковский счёт',loan:'Кредит',deposit:'Вклад',emoney:'Электронный кошелёк',debt:'Долги'};
+ const cards=rows=>rows.map(a=>`<article class="account-card"><div><h3>${esc(a.title)}</h3><p class="muted">${esc(types[a.type]||'Счёт')}${a.savings?' · Накопления':''}</p></div><strong class="account-balance">${exact(a.balance)}</strong><span class="muted">${a.archived?'Архив · не входит в итог':a.included?'Входит в итог':'Не входит в итог'}</span></article>`).join('');
+ $('accountsContent').innerHTML=summary.rows.length?`<article class="stat primary account-total"><p>${summary.missing?'Известный остаток · неполная сумма':'Общий остаток'}</p><strong>${exact(summary.total)}</strong><span>Счетов в итоге: ${summary.included_count}</span></article><p>В итог входят активные счета с настройкой «В балансе» в Дзен-мани. Отрицательные остатки уменьшают сумму. Кредитный лимит не прибавляется. Системный счёт долгов исключён.</p>${summary.missing?`<p class="tx-notice">У ${summary.missing} счетов нет остатка. Итог неполный — обновите данные в Дзен-мани.</p>`:''}<div class="account-grid">${cards(summary.rows.filter(a=>!a.archived))}</div>${summary.rows.some(a=>a.archived)?`<details class="account-archive"><summary>Архивные счета</summary><div class="account-grid">${cards(summary.rows.filter(a=>a.archived))}</div></details>`:''}`:'<p class="empty">Счета появятся после синхронизации с Дзен-мани.</p>';
+ $('accountsSync').disabled=!data.zen_configured;
+}
+$('accountsSync').onclick=()=>busy($('accountsSync'),async()=>{await api('sync',{});await load();toast('Данные Дзен-мани обновлены');});
