@@ -386,6 +386,23 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(upgraded.setting('zen_cursor'),'1')
         self.assertEqual(upgraded.dashboard('2026-10')['total'],1348)
         self.assertEqual(Ledger(self.ledger.path).dashboard('2026-10')['total'],1348)
+    def test_pending_total_tracks_settlement_and_exclusions(self):
+        l=self.ledger
+        transactions=[self.tx('first',outcome='100.01',hold=True),
+                      self.tx('second',outcome='200.80',hold=True),
+                      self.tx('own',outcome=250,income=250,incomeAccount='b',hold=True),
+                      self.tx('ignored',outcome=500,hold=True)]
+        l.apply_diff(self.diff(transactions))
+        l.edit({'id':'zm:ignored','decision':'ignored'})
+        d=l.dashboard('2026-10')
+        self.assertEqual((d['pending_total'],d['pending_count'],d['total']),(302,2,0))
+        self.assertEqual(l.dashboard('2026-11')['pending_total'],0)
+        transactions[0]['hold']=False
+        l.apply_diff(self.diff(transactions,2))
+        d=l.dashboard('2026-10')
+        self.assertEqual((d['pending_total'],d['pending_count'],d['total']),(201,1,101))
+        self.assertEqual(d['pending_total']+d['total'],302)
+
     def test_pending_own_transfer_never_counts_as_expense(self):
         self.ledger.apply_diff(self.diff([self.tx('saving',outcome=250,income=250,incomeAccount='b',hold=True),self.tx('purchase',outcome=2250,hold=True)]))
         rows={r['source_id']:r for r in self.ledger.records()}

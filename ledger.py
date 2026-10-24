@@ -459,6 +459,7 @@ class Ledger(Features):
                 'rows':rows,'total':sum(r['rubles'] for r in included),'count':len(included),
                 'review':len({r['id'] for key in ('review','category') for r in attention[key]} | {r['id'] for pair in attention['duplicates'] for r in pair.values()}),
                 'pending_count':len(attention['pending']),
+                'pending_total':sum(r['rubles'] for r in attention['pending']),
                 'totals':dict(totals.most_common()),'categories':self.categories(),'mapping':mapping,'months':months,
                 'cutover':self.setting('cutover'),'last_sync':self.setting('last_sync'),'sync_error':self.setting('sync_error'),
                 **self.feature_settings()}
