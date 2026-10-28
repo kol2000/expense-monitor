@@ -435,7 +435,7 @@ class Ledger(Features):
                          'type':account.get('type') or '', 'balance':balance,
                          'archived':archived, 'included':included,
                          'savings':bool(account.get('savings'))})
-        rows.sort(key=lambda r:(r['archived'], not r['included'], r['title'].casefold()))
+        rows.sort(key=lambda r:(r['archived'], r['balance'] is None, -(r['balance'] or 0), r['title'].casefold()))
         return {'rows':rows, 'total':sum(r['balance'] for r in rows if r['included'] and r['balance'] is not None),
                 'missing':sum(r['included'] and r['balance'] is None for r in rows),
                 'included_count':sum(r['included'] for r in rows)}

@@ -84,3 +84,13 @@ html[data-skin]:not([data-skin="forest"]) .badge.review,html[data-skin]:not([dat
 .compact-operation>summary>span:first-child::before{content:"› ";font-weight:700}.compact-operation[open]>summary>span:first-child::before{content:"⌄ "}
 
 .account-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:16px}.account-card{border:1px solid var(--line,#496052);border-radius:16px;padding:20px;display:flex;flex-direction:column;gap:12px}.account-card h3,.account-card p{margin:0}.account-balance{font-size:26px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.account-total{margin-top:20px}.account-archive{margin-top:24px}.account-archive summary{cursor:pointer;padding:12px 0}.month-navigation[hidden]{display:none}
+
+.transaction{column-gap:20px;row-gap:10px}
+.transaction .tx-title{font-size:20px;line-height:1.35;margin:0;overflow-wrap:anywhere}
+.transaction .amount strong{font-size:30px;line-height:1.2;font-weight:700;font-variant-numeric:tabular-nums}
+.tx-main .badge{display:inline-block;margin-top:8px}
+.tx-category{grid-column:1/-1;font-size:17px;line-height:1.4;font-weight:600}
+.tx-context{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px 18px;font-size:14px;color:inherit;opacity:.8}
+.transaction .record-editor{margin-top:2px}
+.transaction .record-editor>summary{font-size:13px;font-weight:400}
+@media(max-width:600px){.transaction .tx-title{font-size:18px}.transaction .amount strong{font-size:27px}.tx-category{font-size:16px}}
