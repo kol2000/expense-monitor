@@ -1,6 +1,6 @@
 'use strict';
 function subOptions(category,selected=''){
- return '<option value="">Без уточнения</option>'+(data?.subcategories||[]).filter(s=>s.category===category).map(s=>`<option${s.name===selected?' selected':''}>${esc(s.name)}</option>`).join('');
+ return '<option value="">Без уточнения</option>'+(data?.subcategories||[]).filter(s=>s.category===category).sort((a,b)=>a.name.localeCompare(b.name,'ru',{sensitivity:'base'})).map(s=>`<option${s.name===selected?' selected':''}>${esc(s.name)}</option>`).join('');
 }
 function categoryColor(name){
  const fixed={'Продукты':'#51a58f','Кафе и доставка':'#c69b45','Покупки':'#ac7bcd','Связь и подписки':'#41a7bd','Отдых':'#8fa844','Прочее':'#7f91ac','Домашнее хозяйство':'#b58062','Дом и быт':'#b58062','Семья, подарки, материальная помощь':'#bf75a8','Семья и подарки':'#bf75a8','Медицина':'#d56c83','Здоровье':'#d56c83','Машина':'#e68d49','Налоги':'#a99b70','Дети':'#ddbd56','Транспорт':'#5488dc','Парикмахерская и уход за собой':'#db85ab'};

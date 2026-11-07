@@ -14,7 +14,7 @@ async function api(path,body){
   return result;
 }
 async function busy(button,fn){button.disabled=true;activeActions++;try{await fn();}catch(e){toast(e.message);}finally{button.disabled=false;activeActions--;}}
-function options(selected){return data.categories.map(c=>`<option${c===selected?' selected':''}>${esc(c)}</option>`).join('');}
+function options(selected){return [...data.categories].sort((a,b)=>a.localeCompare(b,'ru',{sensitivity:'base'})).map(c=>`<option${c===selected?' selected':''}>${esc(c)}</option>`).join('');}
 function sourceLabel(source){return {easyfinance:'EasyFinance',zenmoney:'Дзен-мани',manual:'Вручную'}[source]||source;}
 function rowHTML(r,editable=false){
  if(!r.allocation)featureRecords.set(r.id,r);
