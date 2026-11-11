@@ -271,6 +271,12 @@ class Ledger(Features):
             record = db.execute('SELECT * FROM records WHERE id=?',(values['id'],)).fetchone()
             if not record:
                 raise ValueError('Операция не найдена')
+            if 'local_note' in values:
+                note=str(values['local_note']).strip()
+                if len(note)>2000: raise ValueError('Примечание: не более 2000 символов')
+                if note: db.execute('INSERT OR REPLACE INTO record_notes VALUES(?,?)',(values['id'],note))
+                else: db.execute('DELETE FROM record_notes WHERE id=?',(values['id'],))
+                if not any(k in values for k in ('category','decision','subcategory','reset_category','remember')): return
             entities = {(r['kind'],r['id']):json.loads(r['data']) for r in db.execute('SELECT * FROM entities')}
             if values.get('decision')=='expense' and record['source']=='zenmoney' and own_transfer(json.loads(record['raw']),entities):
                 raise ValueError('Перевод между своими счетами не является расходом.')

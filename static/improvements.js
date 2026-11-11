@@ -9,8 +9,7 @@ function updateOperationFilters(){
   const old=$(id).value;$(id).innerHTML='<option value="">Все</option>'+[...new Set(values.filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ru')).map(v=>`<option${v===old?' selected':''}>${esc(v)}</option>`).join('');
  }
 }
-for(const id of ['accountFilter','categoryFilter','payeeFilter','viewMode'])$(id).onchange=()=>{if(id==='viewMode')try{localStorage.setItem('expense-view-mode',$('viewMode').value);}catch(_){}renderRows();};
-try{if(localStorage.getItem('expense-view-mode')==='compact')$('viewMode').value='compact';}catch(_){}
+for(const id of ['accountFilter','categoryFilter','payeeFilter'])$(id).onchange=renderRows;
 function renderSyncHealth(){
  if(!data)return;
  const last=data.last_sync?new Date(data.last_sync):null,stale=last&&Date.now()-last.getTime()>60*60*1000;

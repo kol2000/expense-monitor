@@ -30,6 +30,23 @@ def export(rows):
     return out.getvalue().encode('cp1251')
 
 class LedgerTests(unittest.TestCase):
+    def test_local_note_survives_sync_and_can_be_cleared_and_undone(self):
+        l=self.ledger
+        l.apply_diff(self.diff([self.tx(comment='Комментарий банка')]))
+        before=l.records()[0];rid=before['id']
+        l.edit({'id':rid,'local_note':'Для дома\nВторая строка'})
+        r=l.records()[0]
+        self.assertEqual(r['custom_category'],before['custom_category'])
+        self.assertEqual(r['decision'],before['decision'])
+        l.apply_diff(self.diff([self.tx(comment='Обновлено банком')],2))
+        self.assertEqual(l.records()[0]['local_note'],'Для дома\nВторая строка')
+        self.assertEqual(l.records()[0]['note'],'Обновлено банком')
+        l.edit({'id':rid,'local_note':''})
+        self.assertEqual(l.records()[0]['local_note'],'')
+        l.undo({'id':l.history()[0]['id']})
+        self.assertEqual(l.records()[0]['local_note'],'Для дома\nВторая строка')
+        with self.assertRaises(ValueError):l.edit({'id':rid,'local_note':'x'*2001})
+
     def test_account_balances_are_signed_current_and_independent(self):
         accounts = [
             {'id':'a','title':'Card','balance':100.25,'inBalance':True},

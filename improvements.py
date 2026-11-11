@@ -3,13 +3,14 @@ import calendar
 import json
 from datetime import datetime, date, timezone, timedelta
 
-AUDIT_TABLES = {'records':'id', 'record_details':'id', 'rules':'id', 'mapping':'original',
+AUDIT_TABLES = {'records':'id', 'record_details':'id', 'record_notes':'id', 'rules':'id', 'mapping':'original',
                 'categories':'name', 'subcategories':'category,name', 'category_aliases':'original',
                 'settings':'key', 'splits':'id', 'imports':'hash', 'reviews':'kind,key'}
 
 class Improvements:
     def improvements_init(self, db):
         db.executescript("""
+            CREATE TABLE IF NOT EXISTS record_notes(id TEXT PRIMARY KEY,note TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS splits(id TEXT PRIMARY KEY,amount INTEGER NOT NULL,parts TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,created TEXT NOT NULL,label TEXT NOT NULL,
                 changes TEXT NOT NULL,undone INTEGER NOT NULL DEFAULT 0,undoable INTEGER NOT NULL DEFAULT 1);
@@ -74,7 +75,7 @@ class Improvements:
                 for entry in db.execute('SELECT category,subcategory FROM '+table):
                     self.validate_detail(db,entry['category'],entry['subcategory'])
             record_ids={r[0] for r in db.execute('SELECT id FROM records')}
-            for table in ('record_details','splits'):
+            for table in ('record_details','record_notes','splits'):
                 if any(r[0] not in record_ids for r in db.execute('SELECT id FROM '+table)):
                     raise ValueError('Операция используется более новыми уточнениями. Отмените их сначала.')
             for entry in db.execute('SELECT parts FROM splits'):

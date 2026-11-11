@@ -92,7 +92,9 @@ class Features(Improvements):
             rules=[dict(r) for r in db.execute('SELECT * FROM rules ORDER BY preferred DESC,id')]
             details={r['id']:dict(r) for r in db.execute('SELECT * FROM record_details')}
             splits={r['id']:dict(r) for r in db.execute('SELECT * FROM splits')}
+            notes={r['id']:r['note'] for r in db.execute('SELECT * FROM record_notes')}
         for r in rows:
+            r['local_note']=notes.get(r['id'],'')
             r['rule_id']=None;r['subcategory']=''
             r['category_reason']='Назначено вручную' if r['custom_category'] or r['source']=='manual' else 'Соответствие: '+(r['original_category'] or 'Без категории')+' → '+r['category']
             r['decision_reason']='Ваше решение' if r['decision'] else 'Тип операции из источника'
