@@ -47,6 +47,24 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(l.records()[0]['local_note'],'Для дома\nВторая строка')
         with self.assertRaises(ValueError):l.edit({'id':rid,'local_note':'x'*2001})
 
+    def test_quick_accounting_preserves_category_note_and_sync(self):
+        l=self.ledger;l.apply_diff(self.diff([self.tx()]))
+        rid=l.records()[0]['id']
+        l.edit({'id':rid,'category':'Покупки','local_note':'Моё примечание'})
+        l.edit({'id':rid,'decision':'ignored'})
+        r=l.records()[0]
+        self.assertEqual((r['category'],r['local_note'],r['status']),('Покупки','Моё примечание','ignored'))
+        event=l.history()[0]['id']
+        l.apply_diff(self.diff([self.tx()],2))
+        self.assertEqual(l.records()[0]['status'],'ignored')
+        l.undo({'id':event})
+        self.assertEqual(l.records()[0]['status'],'expense')
+        l.edit({'id':rid,'decision':'ignored'})
+        l.edit({'id':rid,'category':'Продукты'})
+        self.assertEqual(l.records()[0]['status'],'ignored')
+        l.edit({'id':rid,'decision':None})
+        self.assertEqual(l.records()[0]['status'],'expense')
+
     def test_account_balances_are_signed_current_and_independent(self):
         accounts = [
             {'id':'a','title':'Card','balance':100.25,'inBalance':True},

@@ -26,7 +26,7 @@ function rowHTML(r,editable=false){
  const account=r.own_transfer?`${r.account} → ${r.account_to}`:r.account||'Не указан';
  const date=r.day.split('-').reverse().join('.');
  const accounting=r.own_transfer?'Не входит в расходы':!r.primary?'Только для сверки':r.included?'Входит в расходы':r.status==='income'?'Не уменьшает расходы':'Не входит в расходы';
- const reason=r.status==='review'?(r.pending?'Банк обрабатывает покупку. После проведения она обновится автоматически.':r.review_reason):'';
+ const reason=r.status==='review'?(r.pending?'Ожидает списания банком. Обновится автоматически.':'Это расход? Выберите действие ниже.') : '';
  return `<article class="transaction transaction-${esc(r.status)}">
  <div class="tx-main"><h3 class="tx-title">${esc(title)}</h3>${r.status!=='expense'? `<span class="badge ${r.status==='review'?'review':''}">${esc(statuses[r.status]||r.status)}</span>`:''}</div>
  <div class="amount"><strong>${headline}</strong>${!r.included?`<span class="tx-accounting">${accounting}</span>`:''}</div>
@@ -34,7 +34,7 @@ function rowHTML(r,editable=false){
  <div class="tx-context"><time datetime="${esc(r.day)}">${esc(date)}</time><span aria-label="Счёт">${esc(account)}</span></div>
  ${r.parts?.length?`<div class="tx-note"><strong>${r.split_stale?'Разделение требует проверки':'Покупка разделена'}</strong>${r.parts.map(p=>`<div>${esc(p.category)}${p.subcategory?' / '+esc(p.subcategory):''} · ${(p.amount/100).toLocaleString('ru-RU')} ₽</div>`).join('')}</div>`:''}
  ${reason?`<p class="tx-notice">${esc(reason)}</p>`:''}${r.note?`<p class="tx-note"><span>Комментарий</span>${esc(r.note)}</p>`:''}
- ${editable?`<details class="record-editor"><summary>Подробнее / изменить</summary><div class="record-actions"><label>Категория<select data-category="${esc(r.id)}" aria-label="Категория операции">${options(r.category)}</select></label><label>Подкатегория<select data-subcategory="${esc(r.id)}">${subOptions(r.category,r.subcategory)}</select></label><label class="operation-note">Примечание<textarea data-local-note maxlength="2000" rows="3" placeholder="Ваше примечание к операции">${esc(r.local_note||'')}</textarea></label><button data-save="${esc(r.id)}">Сохранить</button><details class="advanced-editor"><summary>Дополнительно: учёт, правила и источник</summary><p class="tx-original">Источник: ${esc(sourceLabel(r.source))}</p><p class="tx-original">Категория источника: ${esc(r.original_category||'Без категории')}</p><p class="tx-original">${esc(r.category_reason||'')} · ${esc(r.decision_reason||'')}</p><label>Учёт этой операции<select data-decision="${esc(r.id)}" aria-label="Учёт операции"><option value="">Как в источнике</option><option value="expense"${r.decision==='expense'?' selected':''}${r.pending||r.own_transfer?' disabled':''}>Считать расходом</option><option value="ignored"${r.decision==='ignored'?' selected':''}>Исключить</option><option value="review"${r.decision==='review'?' selected':''}>Разобрать позже</option></select></label>${!r.own_transfer&&r.kind!=='income'?`<button class="secondary" data-split="${esc(r.id)}">Разделить покупку</button>`:''}${r.original_category?`<button class="secondary" data-map-from="${esc(r.id)}">Исправить соответствие источника</button>`:''}${r.source==='manual'?`<button class="secondary" data-manual-edit="${esc(r.id)}">Сумма, дата и описание</button><button class="quiet" data-manual-delete="${esc(r.id)}">В корзину</button>`:''}${r.source==='zenmoney'&&r.payee?`<button class="secondary" data-rule-from="${esc(r.id)}">Правило для получателя</button><button class="quiet" data-auto-category="${esc(r.id)}">Вернуть автокатегорию</button>`:''}</details></div></details>`:''}</article>`;
+ ${editable?`<details class="record-editor"><summary>Подробнее / изменить</summary><div class="record-actions">${quickAccounting(r)}<label>Категория<select data-category="${esc(r.id)}" aria-label="Категория операции">${options(r.category)}</select></label><label>Подкатегория<select data-subcategory="${esc(r.id)}">${subOptions(r.category,r.subcategory)}</select></label><label class="operation-note">Примечание<textarea data-local-note maxlength="2000" rows="2" placeholder="Примечание (необязательно)">${esc(r.local_note||'')}</textarea></label><button data-save="${esc(r.id)}">Сохранить</button><details class="advanced-editor"><summary>Правила и сведения об источнике</summary><p class="tx-original">Источник: ${esc(sourceLabel(r.source))}</p><p class="tx-original">Категория источника: ${esc(r.original_category||'Без категории')}</p><p class="tx-original">${esc(r.category_reason||'')} · ${esc(r.decision_reason||'')}</p>${!r.own_transfer&&r.kind!=='income'?`<button class="secondary" data-split="${esc(r.id)}">Разделить покупку</button>`:''}${r.original_category?`<button class="secondary" data-map-from="${esc(r.id)}">Исправить соответствие источника</button>`:''}${r.source==='manual'?`<button class="secondary" data-manual-edit="${esc(r.id)}">Сумма, дата и описание</button><button class="quiet" data-manual-delete="${esc(r.id)}">В корзину</button>`:''}${r.source==='zenmoney'&&r.payee?`<button class="secondary" data-rule-from="${esc(r.id)}">Правило для получателя</button><button class="quiet" data-auto-category="${esc(r.id)}">Вернуть автокатегорию</button>`:''}</details></div></details>`:''}</article>`;
 }
 
 function showPage(page){if($('operationDialog')?.open)$('operationDialog').close();currentPage=page;document.querySelectorAll('.page').forEach(el=>el.hidden=el.id!==page);document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===page));$('pageTitle').textContent={accounts:'Счета',overview:'Обзор расходов',transactions:'Все операции',reconcile:'Сверка с EasyFinance',settings:'Категории и данные',appearance:'Настройки',history:'История изменений',reports:'Отчёты',attention:'Требует внимания'}[page];document.querySelector('.month-navigation').hidden=page==='accounts';if(page==='accounts'){renderAccounts();autoRefresh();}updatePeriodLabels();if(page==='history')loadHistory().catch(e=>toast(e.message));if(page==='attention')loadAttention().catch(e=>toast(e.message));if(page==='reports')loadReports().catch(e=>toast(e.message));}
@@ -70,7 +70,7 @@ document.addEventListener('click',async event=>{
  const button=event.target.closest('button');if(!button)return;
  if(button.dataset.page)showPage(button.dataset.page);
  if(button.hasAttribute('data-suggest'))await busy(button,async()=>{await api('mapping',{original:button.dataset.suggest,category:button.dataset.value});await load();toast('Соответствие сохранено');});
- if(button.dataset.save){await busy(button,async()=>{const id=button.dataset.save;const editor=button.closest('.record-actions');const select=editor.querySelector('[data-category]');const decision=editor.querySelector('[data-decision]');const original=featureRecords.get(id);const patch={id,local_note:editor.querySelector('[data-local-note]').value};if(select.value!==original.category||editor.querySelector('[data-subcategory]').value!==(original.subcategory||'')||decision.value!==(original.decision||'')){Object.assign(patch,{category:select.value,decision:decision.value||null,subcategory:editor.querySelector('[data-subcategory]').value});}await api('edit',patch);$('operationDialog').close();await load();toast('Операция сохранена');});}
+ if(button.dataset.save){await busy(button,async()=>{const id=button.dataset.save;const editor=button.closest('.record-actions');const select=editor.querySelector('[data-category]');const original=featureRecords.get(id);const patch={id,local_note:editor.querySelector('[data-local-note]').value};if(select.value!==original.category||editor.querySelector('[data-subcategory]').value!==(original.subcategory||'')){Object.assign(patch,{category:select.value,subcategory:editor.querySelector('[data-subcategory]').value});}await api('edit',patch);$('operationDialog').close();await load();toast('Операция сохранена');});}
  if(button.dataset.rename){await busy(button,async()=>{const old=button.dataset.rename;const input=[...document.querySelectorAll('[data-rename-input]')].find(e=>e.dataset.renameInput===old);await api('categories',{old,name:input.value});await load();toast('Категории обновлены');});}
 });
 document.addEventListener('change',event=>{if(event.target.matches('[data-map]'))busy(event.target,async()=>{await api('mapping',{original:event.target.dataset.map,category:event.target.value});await load();toast('Соответствие сохранено');});});
@@ -183,4 +183,26 @@ document.addEventListener('click',event=>{
  const button=event.target.closest('[data-open-operation]');if(!button)return;
  const r=featureRecords.get(button.dataset.openOperation);if(!r)return;
  $('operationContent').innerHTML=rowHTML(r,true);$('operationContent').querySelector('.record-editor').open=true;$('operationDialog').showModal();
+});
+
+function quickAccounting(r){
+ if(r.own_transfer||r.kind==='income')return '';
+ const expense=!r.pending&&r.status!=='expense'?`<button data-accounting="expense" data-operation="${esc(r.id)}">Считать расходом</button>`:'';
+ const exclude=r.status!=='ignored'?`<button class="secondary" data-accounting="ignored" data-operation="${esc(r.id)}">Не учитывать</button>`:`<button class="secondary" data-accounting="reset" data-operation="${esc(r.id)}">Вернуть в учёт по источнику</button>`;
+ return `<div class="quick-accounting">${expense}${exclude}<small>Применяется сразу к этой операции</small></div>`;
+}
+document.addEventListener('click',async event=>{
+ const button=event.target.closest('[data-accounting]');if(!button)return;
+ const editor=button.closest('.record-actions');
+ const buttons=[...editor.querySelectorAll('button')];if(editor.dataset.saving)return;
+ editor.dataset.saving='1';buttons.forEach(b=>b.disabled=true);
+ await busy(button,async()=>{
+  const id=button.dataset.operation,original=featureRecords.get(id);
+  const patch={id,decision:button.dataset.accounting==='reset'?null:button.dataset.accounting,local_note:editor.querySelector('[data-local-note]').value};
+  const category=editor.querySelector('[data-category]').value,subcategory=editor.querySelector('[data-subcategory]').value;
+  if(category!==original.category||subcategory!==(original.subcategory||''))Object.assign(patch,{category,subcategory});
+  await api('edit',patch);$('operationDialog').close();await load();
+  toast(button.dataset.accounting==='ignored'?'Операция исключена. Отменить можно в истории изменений.':'Учёт операции обновлён');
+ });
+ delete editor.dataset.saving;buttons.forEach(b=>b.disabled=false);
 });

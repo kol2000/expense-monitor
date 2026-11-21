@@ -280,12 +280,12 @@ class Ledger(Features):
             entities = {(r['kind'],r['id']):json.loads(r['data']) for r in db.execute('SELECT * FROM entities')}
             if values.get('decision')=='expense' and record['source']=='zenmoney' and own_transfer(json.loads(record['raw']),entities):
                 raise ValueError('Перевод между своими счетами не является расходом.')
-            decision = values.get('decision')
+            decision = values.get('decision',record['decision'])
             if decision not in (None,'expense','ignored','review'):
                 raise ValueError('Неизвестное решение')
             if decision == 'expense' and json.loads(record['raw']).get('_blocked'):
                 raise ValueError('Операция ожидает окончательного списания банком. Дождитесь обновления из Дзен-мани; повторно вручную расход добавлять не нужно.')
-            category = values.get('category') or None
+            category = (values.get('category') or None) if 'category' in values else record['custom_category']
             if category and not db.execute('SELECT 1 FROM categories WHERE name=?',(category,)).fetchone():
                 raise ValueError('Неизвестная категория')
             db.execute('UPDATE records SET decision=?,custom_category=? WHERE id=?',(decision,category,values['id']))
